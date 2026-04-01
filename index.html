@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Harran Üniversitesi – Kampüs Turu</title>
+    <link rel="stylesheet" href="/css/main.css">
+</head>
+<body>
+
+    <div id="web-hand-preview" aria-hidden="true"></div>
+
+    <!-- AUTH SCREEN -->
+    <div id="auth-screen">
+        <div class="auth-card">
+            <div class="uni-crest">🏛️</div>
+            <h2>Harran Kampüs Giriş</h2>
+            <p class="auth-sub">Devam etmek için giriş yap</p>
+            <div class="auth-tabs">
+                <button id="auth-tab-login" class="active" type="button">Giriş Yap</button>
+                <button id="auth-tab-register" type="button">Kayıt Ol</button>
+            </div>
+
+            <form id="auth-login-form" class="auth-form">
+                <input id="auth-login-username" type="text" placeholder="Kullanıcı adı" maxlength="64" required>
+                <input id="auth-login-password" type="password" placeholder="Şifre" minlength="6" required>
+                <button type="submit" class="auth-btn">Giriş Yap</button>
+                <button type="button" id="auth-guest-btn" class="auth-guest-btn">Misafir olarak gir</button>
+            </form>
+
+            <form id="auth-register-form" class="auth-form" style="display:none">
+                <input id="auth-register-username" type="text" placeholder="Kullanıcı adı" maxlength="64" required>
+                <input id="auth-register-password" type="password" placeholder="Şifre (min 6)" minlength="6" required>
+                <button type="submit" class="auth-btn">Kayıt Ol</button>
+            </form>
+
+            <div id="auth-msg" class="auth-msg"></div>
+            <p class="auth-hand-hint">El önizleme (test): <code>?handPreview=1</code> — önizleme alanında sürükleyerek sağa sola döndürün.</p>
+        </div>
+    </div>
+
+    <!-- HUD -->
+    <div id="crosshair">·</div>
+    <div id="controls-hint">
+        <b>W/S</b> Yürü &nbsp;|&nbsp;<b>Fare</b> Yön<br>
+        <b>Sağ Tık</b> Fare kilidi aç/kapat &nbsp;|&nbsp; Öğrencilere yaklaş! 🎒
+    </div>
+
+    <!-- MINIMAP -->
+    <div id="mm-wrap">
+        <canvas id="minimap" width="165" height="165"></canvas>
+        <div id="mm-label">Kampüs Haritası</div>
+    </div>
+
+    <!-- BUILDING PANEL -->
+    <div id="bldg-panel"><h3>🏢 Binalar</h3></div>
+
+    <!-- LEADERBOARD PANEL -->
+    <div id="lb-panel">
+        <div id="lb-header">
+            <span>🏆 Liderlik Tablosu</span>
+            <button id="lb-toggle-btn" class="lb-toggle">▲</button>
+        </div>
+        <div id="lb-body">
+            <div id="lb-tabs">
+                <button class="lb-tab active" data-game="masa_tenisi" title="Masa Tenisi">🏓</button>
+                <button class="lb-tab" data-game="flappy_bird" title="Flappy Bird">🐦</button>
+                <button class="lb-tab" data-game="penalti" title="Penaltı">⚽</button>
+                <button class="lb-tab" data-game="okculuk" title="Okçuluk">🏹</button>
+                <button class="lb-tab" data-game="basket" title="Basketbol">🏀</button>
+                    <button class="lb-tab" data-game="satranc" title="Satranç">♟️</button>
+            </div>
+            <div id="lb-list"><div class="lb-empty">Yükleniyor…</div></div>
+        </div>
+    </div>
+
+    <!-- INTERACT PROMPT -->
+    <div id="interact-prompt">
+        <div class="ip-icon" id="ip-icon">🎮</div>
+        <div class="ip-title" id="ip-title">Oynamak ister misin?</div>
+        <div class="ip-sub" id="ip-sub"></div>
+        <div class="ip-btns">
+            <button id="ip-yes">Oyna! 🎮</button>
+            <button id="ip-no">Hayır</button>
+        </div>
+    </div>
+
+    <!-- MINI-GAME OVERLAY -->
+    <div id="game-overlay">
+        <canvas id="game-canvas" width="600" height="400"></canvas>
+        <div id="game-hud">
+            <span id="game-score-txt">Skor: 0</span>
+            <span id="game-info-txt"></span>
+            <button id="game-quit-btn">✕ Çıkış</button>
+        </div>
+    </div>
+
+    <!-- SCORE MODAL -->
+    <div id="score-modal">
+        <div class="sm-card">
+            <h2 id="sm-game-name">Oyun Bitti!</h2>
+            <div class="sm-final" id="sm-score-val">0</div>
+            <p>Puanını kaydetmek ister misin?</p>
+            <input id="sm-name" type="text" placeholder="Adını gir… (maks 20 harf)" maxlength="20">
+            <div class="sm-btns">
+                <button id="sm-save">Kaydet 💾</button>
+                <button id="sm-skip">Atla</button>
+            </div>
+            <div id="sm-rank-info"></div>
+            <button id="sm-close-btn">Kapat</button>
+        </div>
+    </div>
+
+    <!-- MOBİL BUTONLAR -->
+    <div id="joy-base"><div id="joy-thumb"></div></div>
+    <div id="joy-label">HAREKET</div>
+    <button class="m-btn" id="m-bldg-btn" title="Binalar">🏢</button>
+    <button class="m-btn" id="m-map-btn" title="Harita">🗺️</button>
+    <button class="m-btn" id="m-lb-btn" title="Liderlik">🏆</button>
+
+    <script type="module" src="/js/main.js"></script>
+</body>
+</html>

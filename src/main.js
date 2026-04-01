@@ -1,0 +1,1 @@
+console.log("Three.js proje çalışıyor");
