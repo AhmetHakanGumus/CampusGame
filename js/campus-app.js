@@ -21,6 +21,66 @@ import { createMultiplayerClient } from './multiplayer.js';
 
         applyPlatformDom();
 
+        // Gap Yenev: Blender referansı — merkez daire + üç kanat (dış yay, iç yay, hub arası yay), 120° simetri.
+        (function initGapYenevTriskelionMapPolygon() {
+            const spec = BUILDINGS.find((b) => b.name === 'Gap Yenev');
+            if (!spec) return;
+            const cx = 36;
+            const cz = 50;
+            const rot = -Math.PI / 6;
+            const cosR = Math.cos(rot);
+            const sinR = Math.sin(rot);
+            const toWorld = (lx, lz) => ({
+                x: cx + lx * cosR - lz * sinR,
+                z: cz + lx * sinR + lz * cosR
+            });
+
+            const R_hub = 2.6;
+            const R_inner = 4.0;
+            const R_outer = 11;
+            const alpha = 0.4;
+            const TAU = Math.PI * 2;
+            const nHub = 10;
+            const nInner = 14;
+            const nOuter = 22;
+            const nRad = 1;
+
+            const pts = [];
+            const push = (lx, lz) => pts.push(toWorld(lx, lz));
+            const pushArc = (r, a0, a1, nSeg, skipFirst) => {
+                for (let i = skipFirst ? 1 : 0; i <= nSeg; i++) {
+                    const t = i / nSeg;
+                    const a = a0 + (a1 - a0) * t;
+                    push(r * Math.cos(a), r * Math.sin(a));
+                }
+            };
+            const pushRadial = (r0, r1, ang, skipFirst) => {
+                for (let i = skipFirst ? 1 : 0; i <= nRad; i++) {
+                    const t = i / nRad;
+                    const r = r0 + (r1 - r0) * t;
+                    push(r * Math.cos(ang), r * Math.sin(ang));
+                }
+            };
+
+            for (let k = 0; k < 3; k++) {
+                const phi = k * (TAU / 3);
+                const phiPrev = phi - TAU / 3;
+                pushArc(R_hub, phiPrev - alpha, phi - alpha, nHub, pts.length > 0);
+                pushRadial(R_hub, R_inner, phi - alpha, false);
+                pushArc(R_inner, phi - alpha, phi + alpha, nInner, true);
+                pushRadial(R_inner, R_outer, phi + alpha, true);
+                pushArc(R_outer, phi + alpha, phi - alpha, nOuter, true);
+                pushRadial(R_outer, R_hub, phi - alpha, true);
+            }
+
+            spec.mapPolygon = pts;
+            let sx = 0;
+            let sz = 0;
+            pts.forEach((p) => { sx += p.x; sz += p.z; });
+            spec.x = sx / pts.length;
+            spec.z = sz / pts.length;
+        })();
+
         /* ════════════════ STATE ════════════════════════ */
         let renderer, scene, camera;
         let player, playerYaw = 0, playerPitch = 0.18;
@@ -123,6 +183,34 @@ import { createMultiplayerClient } from './multiplayer.js';
         let vrSpotCanvas = null;
         let vrSpotCtx = null;
         let vrSpotTexture = null;
+        let vrCharWindow = null;
+        let vrCharCanvas = null;
+        let vrCharCtx = null;
+        let vrCharTexture = null;
+        let vrCharPointerLeft = null;
+        let vrCharPointerRight = null;
+        let vrCharOpen = false;
+        let vrCharToggleLatch = false;
+        let vrCharMannequin = null;
+
+        const FACE_PRESETS = [
+            { id: 'neutral', label: '🙂 Nötr' },
+            { id: 'happy', label: '😄 Mutlu' },
+            { id: 'angry', label: '😠 Kızgın' },
+            { id: 'sad', label: '😢 Üzgün' },
+        ];
+        const BODY_COLORS = [
+            { id: 'blue', label: 'Mavi', hex: 0x1a4f8a },
+            { id: 'red', label: 'Kırmızı', hex: 0xb93434 },
+            { id: 'green', label: 'Yeşil', hex: 0x2f8a52 },
+            { id: 'purple', label: 'Mor', hex: 0x6c3fb3 },
+            { id: 'yellow', label: 'Sarı', hex: 0xc9a030 },
+            { id: 'white', label: 'Beyaz', hex: 0xe0e6ef },
+        ];
+        // "pending": UI'de seçilen ama henüz uygulanmamış görünüm (önizleme + manken)
+        // "applied": oyuncuya ve multiplayer'a gönderilen görünüm
+        const appearancePending = { faceIdx: 0, bodyIdx: 0 };
+        const appearanceApplied = { faceIdx: 0, bodyIdx: 0 };
         let waypointTargetIdx = -1;
         let waypointMarker = null;
         let netTimer = 0;
@@ -145,6 +233,9 @@ import { createMultiplayerClient } from './multiplayer.js';
         let xrSupported = false;
         let xrLeftHand = null, xrRightHand = null;
         let xrHandsLoaded = false;
+        let xrHandModelLoadPromise = null;
+        let xrCtrl0Handedness = '';
+        let xrCtrl1Handedness = '';
         const xrHandMixers = [];
         const xrHandClock = new THREE.Clock();
         let xrGrabbedLeft = null, xrGrabbedRight = null;
@@ -179,6 +270,9 @@ import { createMultiplayerClient } from './multiplayer.js';
             vrSpotPointerLeft = null;
             vrSpotPointerRight = null;
             vrMenuToggleLatch = false;
+            vrCharPointerLeft = null;
+            vrCharPointerRight = null;
+            vrCharToggleLatch = false;
         }
 
         function startNonVRLoop() {
@@ -459,6 +553,7 @@ import { createMultiplayerClient } from './multiplayer.js';
                 hideHTMLForVR(true);
                 initVrMenuWindow();
                 initVrSpotWindow();
+                setVrCharOpen(false);
                 vrMenuAngle = 0;
                 vrMenuTargetAngle = 0;
                 vrMenuHeight = 1.5;
@@ -466,6 +561,7 @@ import { createMultiplayerClient } from './multiplayer.js';
                 updateVrMenuTransform(1 / 60);
                 if (vrMenuWindow) vrMenuWindow.visible = escMenuOpen;
                 if (vrSpotWindow) vrSpotWindow.visible = false;
+                if (vrCharWindow) vrCharWindow.visible = false;
 
                 renderer.setAnimationLoop(loop);
                 console.log('VR oturumu başladı – 1. şahıs modu');
@@ -492,6 +588,9 @@ import { createMultiplayerClient } from './multiplayer.js';
                 hideHTMLForVR(false);
                 if (vrMenuWindow) vrMenuWindow.visible = false;
                 if (vrSpotWindow) vrSpotWindow.visible = false;
+                if (vrCharWindow) vrCharWindow.visible = false;
+                if (vrCharMannequin) vrCharMannequin.visible = false;
+                vrCharOpen = false;
                 if (vrChessStandalone) clearVrChess();
 
                 startNonVRLoop();
@@ -919,12 +1018,14 @@ import { createMultiplayerClient } from './multiplayer.js';
             if (xrHandsLoaded || !xrGrip0 || !xrGrip1 || !xrCtrl0 || !xrCtrl1) return;
             xrHandMixers.length = 0;
 
+            // Model el yükleme iptal: eski procedural eller.
             const loadedModels = { left: null, right: null };
             const buildHand = (side) => {
                 const h = createDetailedVRHand(side);
                 h.root.userData.handedness = side;
                 h.root.fingers = h.fingers;
                 h.root.visible = false;
+                h.root.userData.isVrHand = true;
                 return h.root;
             };
 
@@ -935,9 +1036,11 @@ import { createMultiplayerClient } from './multiplayer.js';
             loadedModels.right = buildHand('left');
             loadedModels.right.userData.handedness = 'right';
             loadedModels.right.rotation.z *= -1;
+
             xrLeftHand = loadedModels.left;
             xrRightHand = loadedModels.right;
             xrHandsLoaded = true;
+            xrHandModelLoadPromise = null;
             console.log('initVRHands: Procedural hands hazir, connected bekliyor...');
 
             const attachHand = (ctrlIndex, handedness) => {
@@ -950,7 +1053,6 @@ import { createMultiplayerClient } from './multiplayer.js';
                 hand.visible = true;
                 // Baglanti aninda da acik avuc yerine kontrolcu-tutma dinlenim pozu.
                 setVRHandPose(hand, { grip: 0, trigger: 0, point: 0, thumbsUp: 0 });
-                console.log(`VR el baglandi: ${handedness} -> grip${ctrlIndex}`);
             };
 
             const detachHand = (handedness) => {
@@ -961,10 +1063,12 @@ import { createMultiplayerClient } from './multiplayer.js';
 
             xrCtrl0.addEventListener('connected', (ev) => {
                 const h = String(ev?.data?.handedness || '').toLowerCase();
+                xrCtrl0Handedness = h;
                 if (h === 'left' || h === 'right') attachHand(0, h);
             });
             xrCtrl1.addEventListener('connected', (ev) => {
                 const h = String(ev?.data?.handedness || '').toLowerCase();
+                xrCtrl1Handedness = h;
                 if (h === 'left' || h === 'right') attachHand(1, h);
             });
             xrCtrl0.addEventListener('disconnected', (ev) => {
@@ -1410,6 +1514,310 @@ import { createMultiplayerClient } from './multiplayer.js';
             vrSpotWindow.visible = false;
             xrRig.add(vrSpotWindow);
             updateVrSpotWindow();
+        }
+
+        function initVrCharWindow() {
+            if (vrCharWindow || !xrRig) return;
+            vrCharCanvas = document.createElement('canvas');
+            vrCharCanvas.width = 900;
+            vrCharCanvas.height = 520;
+            vrCharCtx = vrCharCanvas.getContext('2d');
+            vrCharTexture = new THREE.CanvasTexture(vrCharCanvas);
+            const mat = new THREE.MeshBasicMaterial({
+                map: vrCharTexture,
+                transparent: true,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+                depthTest: false
+            });
+            vrCharWindow = new THREE.Mesh(makeCurvedMenuGeometry(1.55, 0.90, 26, 0.20), mat);
+            vrCharWindow.position.set(0, 1.35, -1.85);
+            vrCharWindow.renderOrder = 20;
+            vrCharWindow.visible = false;
+            xrRig.add(vrCharWindow);
+            updateVrCharWindow();
+        }
+
+        function initVrCharMannequin() {
+            if (vrCharMannequin || !xrRig) return;
+            const m = makeHuman(0x1a4f8a, 0x1a2a3a);
+            m.scale.setScalar(0.52);
+            // pencerenin sağında, önde dursun (menünün arkasında kalmasın)
+            m.position.set(1.08, 0.78, -1.72);
+            m.rotation.y = Math.PI;
+            m.renderOrder = 21;
+            m.traverse?.((o) => {
+                if (o && o.isMesh) o.renderOrder = 21;
+            });
+            xrRig.add(m);
+            vrCharMannequin = m;
+            applyPendingAppearanceToMannequin();
+        }
+
+        function updateVrCharWindow() {
+            if (!vrCharCtx || !vrCharTexture || !vrCharCanvas) return;
+            const c = vrCharCtx;
+            const W = vrCharCanvas.width;
+            const H = vrCharCanvas.height;
+            c.clearRect(0, 0, W, H);
+            c.fillStyle = 'rgba(6, 14, 24, 0.90)';
+            c.fillRect(0, 0, W, H);
+
+            c.fillStyle = '#f7d977';
+            c.font = 'bold 38px Arial';
+            c.fillText('Karakter', 36, 64);
+
+            // Close
+            c.fillStyle = 'rgba(255,120,120,.18)';
+            c.fillRect(W - 150, 22, 116, 46);
+            c.strokeStyle = 'rgba(255,160,160,.45)';
+            c.lineWidth = 2;
+            c.strokeRect(W - 150, 22, 116, 46);
+            c.fillStyle = '#ffd2d2';
+            c.font = 'bold 26px Arial';
+            c.fillText('Kapat', W - 132, 54);
+
+            // Face section
+            c.fillStyle = '#d9ecff';
+            c.font = 'bold 24px Arial';
+            c.fillText('Yüz ifadesi', 36, 128);
+            const face = FACE_PRESETS[appearancePending.faceIdx] || FACE_PRESETS[0];
+            c.font = '22px Arial';
+            c.fillStyle = '#bcd6ff';
+            c.fillText(`Seçili: ${face?.label || '-'}`, 36, 160);
+
+            const btnH = 84;
+            const prevX = 36, prevY = 184, prevW = 190;
+            const nextX = 36 + prevW + 16, nextY = prevY, nextW = 190;
+            c.fillStyle = 'rgba(255,255,255,.08)';
+            c.fillRect(prevX, prevY, prevW, btnH);
+            c.fillRect(nextX, nextY, nextW, btnH);
+            c.strokeStyle = 'rgba(255,255,255,.18)';
+            c.lineWidth = 2;
+            c.strokeRect(prevX, prevY, prevW, btnH);
+            c.strokeRect(nextX, nextY, nextW, btnH);
+            c.fillStyle = '#e7f0ff';
+            c.font = 'bold 30px Arial';
+            c.fillText('◀ Önceki', prevX + 28, prevY + 52);
+            c.fillText('Sonraki ▶', nextX + 28, nextY + 52);
+
+            // Body color section
+            c.fillStyle = '#d9ecff';
+            c.font = 'bold 24px Arial';
+            c.fillText('Gövde rengi', 36, 312);
+            const body = BODY_COLORS[appearancePending.bodyIdx] || BODY_COLORS[0];
+            c.font = '22px Arial';
+            c.fillStyle = '#bcd6ff';
+            c.fillText(`Seçili: ${body?.label || '-'}`, 36, 344);
+
+            const swY = 368;
+            const swW = 128;
+            const swH = 56;
+            const gap = 14;
+            BODY_COLORS.slice(0, 6).forEach((col, i) => {
+                const x = 36 + (i % 3) * (swW + gap);
+                const y = swY + Math.floor(i / 3) * (swH + 14);
+                c.fillStyle = `#${col.hex.toString(16).padStart(6, '0')}`;
+                c.fillRect(x, y, swW, swH);
+                const active = i === appearancePending.bodyIdx;
+                c.lineWidth = active ? 5 : 2;
+                c.strokeStyle = active ? 'rgba(232,200,112,.95)' : 'rgba(255,255,255,.22)';
+                c.strokeRect(x, y, swW, swH);
+                c.fillStyle = active ? 'rgba(0,0,0,.35)' : 'rgba(0,0,0,.22)';
+                c.fillRect(x, y + swH - 22, swW, 22);
+                c.fillStyle = '#eaf4ff';
+                c.font = 'bold 16px Arial';
+                c.fillText(col.label, x + 10, y + swH - 6);
+            });
+
+            // Apply button
+            const applyW = 210, applyH = 76;
+            const applyX = W - applyW - 36;
+            const applyY = H - applyH - 22;
+            const dirty = appearancePending.faceIdx !== appearanceApplied.faceIdx || appearancePending.bodyIdx !== appearanceApplied.bodyIdx;
+            c.fillStyle = dirty ? 'rgba(64, 168, 98, 0.34)' : 'rgba(255,255,255,0.08)';
+            c.fillRect(applyX, applyY, applyW, applyH);
+            c.strokeStyle = dirty ? 'rgba(126, 255, 164, 0.92)' : 'rgba(255,255,255,0.18)';
+            c.lineWidth = 3;
+            c.strokeRect(applyX, applyY, applyW, applyH);
+            c.fillStyle = dirty ? '#eaffef' : '#dceeff';
+            c.font = 'bold 34px Arial';
+            c.fillText('UYGULA', applyX + 40, applyY + 50);
+
+            c.fillStyle = '#9ed3ff';
+            c.font = '20px Arial';
+            c.fillText('Sol grip: aç/kapat  |  Trigger / A / X: tıkla', 36, H - 28);
+
+            if (vrCharPointerLeft) {
+                c.beginPath();
+                c.strokeStyle = '#59c7ff';
+                c.lineWidth = 3;
+                c.arc(vrCharPointerLeft.x, vrCharPointerLeft.y, 13, 0, Math.PI * 2);
+                c.stroke();
+            }
+            if (vrCharPointerRight) {
+                c.beginPath();
+                c.strokeStyle = '#8cff8c';
+                c.lineWidth = 3;
+                c.arc(vrCharPointerRight.x, vrCharPointerRight.y, 13, 0, Math.PI * 2);
+                c.stroke();
+            }
+            vrCharTexture.needsUpdate = true;
+        }
+
+        function updateVrCharTransform(dt) {
+            if (!vrCharWindow || !xrRig) return;
+            const k = Math.min(1, Math.max(0.03, dt * 12));
+            // Sabit, hafif yukarı; menü gibi sürüklenmesin (bu pencere daha "modal").
+            vrCharWindow.position.x += (0 - vrCharWindow.position.x) * k;
+            vrCharWindow.position.y += (1.35 - vrCharWindow.position.y) * k;
+            vrCharWindow.position.z += (-1.85 - vrCharWindow.position.z) * k;
+            xrRig.getWorldPosition(vrMenuLookTarget);
+            vrMenuLookTarget.y += 1.35;
+            vrCharWindow.lookAt(vrMenuLookTarget);
+
+            if (vrCharMannequin) {
+                // pencere açıkken sağ tarafta sabit dursun
+                const tx = 1.08, ty = 0.78, tz = -1.72;
+                vrCharMannequin.position.x += (tx - vrCharMannequin.position.x) * k;
+                vrCharMannequin.position.y += (ty - vrCharMannequin.position.y) * k;
+                vrCharMannequin.position.z += (tz - vrCharMannequin.position.z) * k;
+
+                // Dik dursun: sadece Y ekseninde (yaw) döndür.
+                vrCharMannequin.rotation.x = 0;
+                vrCharMannequin.rotation.z = 0;
+                if (renderer?.xr && camera) {
+                    const xrCam = renderer.xr.getCamera(camera);
+                    if (xrCam) {
+                        const dx = xrCam.position.x - vrCharMannequin.position.x;
+                        const dz = xrCam.position.z - vrCharMannequin.position.z;
+                        const yawToCam = Math.atan2(dx, dz);
+                        // Yüz dokusu kafanın "back" yüzünde olduğundan +PI ile çevir.
+                        // Ayrıca hafif 3/4 açı ver (tam düz bakmasın).
+                        vrCharMannequin.rotation.y = yawToCam + Math.PI - 0.35;
+                    }
+                }
+            }
+        }
+
+        function getVrCharHit(src, session) {
+            if (!vrCharOpen || !vrCharWindow?.visible || !vrCharCanvas) return null;
+            const ctrl = getVrControllerForSource(session, src);
+            if (!ctrl) return null;
+            const origin = new THREE.Vector3();
+            const dir = new THREE.Vector3();
+            ctrl.getWorldPosition(origin);
+            ctrl.getWorldDirection(dir);
+            dir.negate().normalize();
+            const hit = new THREE.Raycaster(origin, dir).intersectObject(vrCharWindow, false)[0];
+            if (!hit?.uv) return null;
+            return {
+                x: hit.uv.x * vrCharCanvas.width,
+                y: (1 - hit.uv.y) * vrCharCanvas.height
+            };
+        }
+
+        function setVrCharOpen(open) {
+            if (vrCharOpen === open) return;
+            vrCharOpen = open;
+            if (open) {
+                // Açılırken: pending'i mevcut applied'dan başlat (önizleme)
+                appearancePending.faceIdx = appearanceApplied.faceIdx;
+                appearancePending.bodyIdx = appearanceApplied.bodyIdx;
+                initVrCharWindow();
+                initVrCharMannequin();
+                updateVrCharWindow();
+            }
+            if (vrCharWindow) vrCharWindow.visible = !!(xrActive && vrCharOpen);
+            if (vrCharMannequin) vrCharMannequin.visible = !!(xrActive && vrCharOpen);
+            // Karakter penceresi açıkken ESC menüsünü kapat (çakışma olmasın).
+            if (open && escMenuOpen) setEscMenuOpen(false);
+            // Pencere açılınca spot etkileşimini gizle.
+            if (open && vrSpotWindow) vrSpotWindow.visible = false;
+            vrCharPointerLeft = null;
+            vrCharPointerRight = null;
+            vrInputCooldownUntil = performance.now() + 220;
+        }
+
+        function applyPendingAppearanceToMannequin() {
+            const body = BODY_COLORS[appearancePending.bodyIdx] || BODY_COLORS[0];
+            const face = FACE_PRESETS[appearancePending.faceIdx] || FACE_PRESETS[0];
+            if (vrCharMannequin) {
+                setHumanBodyColor(vrCharMannequin, body.hex);
+                setHumanFace(vrCharMannequin, face.id);
+            }
+        }
+
+        function applyAppliedAppearanceToPlayer() {
+            const body = BODY_COLORS[appearanceApplied.bodyIdx] || BODY_COLORS[0];
+            const face = FACE_PRESETS[appearanceApplied.faceIdx] || FACE_PRESETS[0];
+            if (player) {
+                setHumanBodyColor(player, body.hex);
+                setHumanFace(player, face.id);
+            }
+        }
+
+        function commitPendingAppearance() {
+            appearanceApplied.faceIdx = appearancePending.faceIdx;
+            appearanceApplied.bodyIdx = appearancePending.bodyIdx;
+            applyAppliedAppearanceToPlayer();
+            updateVrCharWindow();
+            vrInputCooldownUntil = performance.now() + 220;
+        }
+
+        function clickVrCharAt(hit) {
+            if (!hit || !vrCharOpen || !vrCharCanvas) return false;
+            const W = vrCharCanvas.width;
+            const H = vrCharCanvas.height;
+            const x = hit.x;
+            const y = hit.y;
+
+            // Close
+            if (x >= W - 150 && x <= W - 34 && y >= 22 && y <= 68) {
+                setVrCharOpen(false);
+                return true;
+            }
+
+            // Apply
+            const applyW = 210, applyH = 76;
+            const applyX = W - applyW - 36;
+            const applyY = H - applyH - 22;
+            if (x >= applyX && x <= applyX + applyW && y >= applyY && y <= applyY + applyH) {
+                commitPendingAppearance();
+                return true;
+            }
+
+            // Face prev/next
+            const prevX = 36, prevY = 184, prevW = 190, btnH = 84;
+            const nextX = 36 + prevW + 16, nextY = prevY, nextW = 190;
+            if (y >= prevY && y <= prevY + btnH) {
+                if (x >= prevX && x <= prevX + prevW) {
+                    appearancePending.faceIdx = (appearancePending.faceIdx - 1 + FACE_PRESETS.length) % FACE_PRESETS.length;
+                    applyPendingAppearanceToMannequin();
+                    updateVrCharWindow();
+                    return true;
+                }
+                if (x >= nextX && x <= nextX + nextW) {
+                    appearancePending.faceIdx = (appearancePending.faceIdx + 1) % FACE_PRESETS.length;
+                    applyPendingAppearanceToMannequin();
+                    updateVrCharWindow();
+                    return true;
+                }
+            }
+
+            // Body swatches (3x2)
+            const swY = 368, swW = 128, swH = 56, gap = 14;
+            for (let i = 0; i < Math.min(6, BODY_COLORS.length); i++) {
+                const bx = 36 + (i % 3) * (swW + gap);
+                const by = swY + Math.floor(i / 3) * (swH + 14);
+                if (x >= bx && x <= bx + swW && y >= by && y <= by + swH) {
+                    appearancePending.bodyIdx = i;
+                    applyPendingAppearanceToMannequin();
+                    updateVrCharWindow();
+                    return true;
+                }
+            }
+            return false;
         }
 
         function updateVrSpotWindow() {
@@ -2017,7 +2425,7 @@ import { createMultiplayerClient } from './multiplayer.js';
             }
             if (open) setEscTab(escMenuTab);
             if (vrMenuWindow) vrMenuWindow.visible = !!(open && xrActive);
-            if (vrSpotWindow) vrSpotWindow.visible = !open && xrActive && !!activeSpot && !G.gameRunning;
+            if (vrSpotWindow) vrSpotWindow.visible = !open && !vrCharOpen && xrActive && !!activeSpot && !G.gameRunning;
             if (!open) {
                 vrMenuDragLeft = null;
                 vrMenuDragRight = null;
@@ -2057,14 +2465,16 @@ import { createMultiplayerClient } from './multiplayer.js';
             // VR'da BasicShadowMap çok sert gölge veriyor. Daha düşük çözünürlük + PCF ile yumuşat.
             renderer.shadowMap.type = IS_QUEST ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
             renderer.toneMapping = THREE.ACESFilmicToneMapping;
-            renderer.toneMappingExposure = IS_QUEST ? 0.78 : 0.88;
-            renderer.setClearColor(0x79b4dc);
+            renderer.toneMappingExposure = IS_QUEST ? 0.92 : 1.05;
+            // Daha sıcak gökyüzü tonu
+            renderer.setClearColor(0x8cc0d8);
             renderer.domElement.style.cssText = 'position:fixed;top:0;left:0;z-index:1;width:100%;height:100%';
             document.body.appendChild(renderer.domElement);
 
             // ── Scene & Camera ──────────────────────────
             scene = new THREE.Scene();
-            scene.fog = new THREE.Fog(0x79b4dc, 74, IS_MOB ? 128 : 176);
+            // Daha sıcak fog (uzakta maviyi biraz kır)
+            scene.fog = new THREE.Fog(0x8bbfd7, 74, IS_MOB ? 128 : 176);
             camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, .1, 500);
             initHandEnvironment();
             if (handEnvMap) scene.environment = handEnvMap;
@@ -2130,12 +2540,12 @@ import { createMultiplayerClient } from './multiplayer.js';
         function buildScene() {
             // Gölgeleri tamamen kapatmadan daha hafif yap: kontrastı azalt (daha fazla ortam ışığı, biraz daha düşük güneş).
             scene.add(new THREE.AmbientLight(
-                0xe2ddd4,
-                IS_QUEST ? 0.52 : (IS_MOB ? 0.48 : 0.34)
+                0xffefe0,
+                IS_QUEST ? 0.62 : (IS_MOB ? 0.58 : 0.42)
             ));
             const sun = new THREE.DirectionalLight(
-                0xffebd2,
-                IS_QUEST ? 0.34 : (IS_MOB ? 0.54 : 0.46)
+                0xffd6b3,
+                IS_QUEST ? 0.44 : (IS_MOB ? 0.64 : 0.56)
             );
             sun.position.set(72, 108, 46);
             if (!IS_MOB && !IS_QUEST) {
@@ -2151,34 +2561,42 @@ import { createMultiplayerClient } from './multiplayer.js';
             }
             scene.add(sun);
             scene.add(new THREE.HemisphereLight(
-                0x7eb0dc,
-                0x3a3328,
-                IS_QUEST ? 0.34 : (IS_MOB ? 0.3 : 0.26)
+                0x9ac9dc,
+                0x4a3a2b,
+                IS_QUEST ? 0.42 : (IS_MOB ? 0.36 : 0.32)
             ));
             const gnd = new THREE.Mesh(new THREE.PlaneGeometry(320, 320), worldStd(0x4a7c3c, 0.94));
             gnd.rotation.x = -Math.PI / 2;
             gnd.receiveShadow = !IS_MOB;
             scene.add(gnd);
+            initVrBlobShadow();
             const pm = worldStd(0x8f8f82, 0.92);
             [[0, 0, 9, 175], [0, -46, 155, 9], [0, 14, 130, 7], [-28, -70, 7, 50], [28, -70, 7, 50]].forEach(([x, z, w, d]) =>
                 addPlane(x, z, w, d, pm, 0.02));
             addPlane(0, -20, 30, 30, worldStd(0xa89872, 0.91), 0.03);
-            // Rektörlük artık gerçek modelle eklenecek; kutu-bina olarak ekleme.
+            // Rektörlük / Gap Yenev gerçek OBJ ile; kutu-bina olarak ekleme.
             BUILDINGS.forEach((b) => {
-                if (b.name === 'Rektörlük') return;
+                if (b.name === 'Rektörlük' || b.name === 'Gap Yenev') return;
                 addBuilding(b);
             });
             addRectorateBuilding();
             addEntranceMonument();
+            addGapYenev();
             const isNearAnit = (x, z) => {
                 const dx = x - (-24.0);
                 const dz = z - 50.0;
                 return (dx * dx + dz * dz) < (10.5 * 10.5);
             };
+            const isNearGapYenev = (x, z) => {
+                const dx = x - (36.0);
+                const dz = z - 50.0;
+                return (dx * dx + dz * dz) < (20.0 * 20.0);
+            };
             [[-16, -22], [16, -22], [-16, -33], [16, -33], [-9, -9], [9, -9], [-32, 6], [32, 6], [-22, 44], [22, 44], [0, 50], [-44, -26], [44, -26], [-72, 6], [72, 6], [-26, -74], [26, -74], [0, -37], [-6, -35], [6, -35], [-45, 44], [45, 44], [-20, 58], [20, 58]]
-                .filter(([x, z]) => !isNearAnit(x, z))
+                .filter(([x, z]) => !isNearAnit(x, z) && !isNearGapYenev(x, z))
                 .forEach(([x, z]) => addTree(x, z, .85 + Math.random() * .4));
             [[6, 2], [-6, 2], [6, -28], [-6, -28], [6, -58], [-6, -58], [32, -24], [-32, -24], [32, -64], [-32, -64], [0, -2], [0, -50]]
+                .filter(([x, z]) => !isNearGapYenev(x, z))
                 .forEach(([x, z]) => addLamp(x, z));
         }
 
@@ -2266,6 +2684,82 @@ import { createMultiplayerClient } from './multiplayer.js';
                 },
                 undefined,
                 (err) => console.error('ANIT.mtl yüklenemedi:', err)
+            );
+        }
+
+        function addGapYenev() {
+            // ANIT'in zıttı: x pozitif tarafta, aynı bant (z~50).
+            const X = 36.0;
+            const Z = 50.0;
+            const tuneMaterial = (m) => {
+                if (!m) return;
+                if (m.isMeshPhongMaterial) {
+                    m.shininess = Math.min(10, m.shininess ?? 10);
+                    if (m.specular) m.specular.setHex(0x111111);
+                    m.needsUpdate = true;
+                } else if (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) {
+                    m.metalness = 0;
+                    m.roughness = Math.max(0.86, m.roughness ?? 0.86);
+                    m.envMapIntensity = 0;
+                    m.needsUpdate = true;
+                }
+            };
+
+            const mtl = new MTLLoader();
+            mtl.setPath('/models/');
+            mtl.load(
+                'Gap-Yenev.mtl',
+                (materials) => {
+                    materials.preload();
+                    const objLoader = new OBJLoader();
+                    objLoader.setMaterials(materials);
+                    objLoader.setPath('/models/');
+                    objLoader.load(
+                        'Gap-Yenev.obj',
+                        (root) => {
+                            root.position.set(X, 0, Z);
+                            // Saat yönü 30° (Y ekseni)
+                            root.rotation.y = -Math.PI / 6;
+
+                            // Ölçek: sahneye uydur (yükseklik hedefi)
+                            const box0 = new THREE.Box3().setFromObject(root);
+                            const size0 = new THREE.Vector3();
+                            box0.getSize(size0);
+                            const targetH = 4.5; // yarı yarıya
+                            const s = targetH / Math.max(0.001, size0.y);
+                            // X/Z sabit kalsın, sadece yükseklik (Y) artsın
+                            const heightMul = 1.45;
+                            root.scale.set(s, s * heightMul, s);
+
+                            // Zemine oturt
+                            const box1 = new THREE.Box3().setFromObject(root);
+                            root.position.y += -box1.min.y;
+
+                            root.traverse((o) => {
+                                if (!o?.isMesh) return;
+                                o.castShadow = !IS_MOB && !IS_QUEST;
+                                o.receiveShadow = !IS_MOB && !IS_QUEST;
+                                if (Array.isArray(o.material)) o.material.forEach(tuneMaterial);
+                                else tuneMaterial(o.material);
+                            });
+
+                            scene.add(root);
+
+                            // Basit çarpışma: daire collider
+                            const box2 = new THREE.Box3().setFromObject(root);
+                            const size2 = new THREE.Vector3();
+                            box2.getSize(size2);
+                            const cx = (box2.min.x + box2.max.x) * 0.5;
+                            const cz = (box2.min.z + box2.max.z) * 0.5;
+                            const r = Math.max(0.5, Math.min(size2.x, size2.z) * 0.5 - 0.6);
+                            circleColliders.push({ x: cx, z: cz, r });
+                        },
+                        undefined,
+                        (err) => console.error('Gap-Yenev.obj yüklenemedi:', err)
+                    );
+                },
+                undefined,
+                (err) => console.error('Gap-Yenev.mtl yüklenemedi:', err)
             );
         }
 
@@ -2647,12 +3141,54 @@ import { createMultiplayerClient } from './multiplayer.js';
         }
 
         /* ════════════════ PLAYER ═══════════════════════ */
+        const SPAWN_STORE_KEY = 'vrh_spawn_v1';
+
+        function saveSpawnForReload() {
+            try {
+                const src = xrActive && xrRig ? xrRig : player;
+                if (!src) return;
+                const x = src.position?.x ?? 0;
+                const z = src.position?.z ?? 108;
+                const yaw = (src.rotation?.y ?? playerYaw ?? 0);
+                localStorage.setItem(SPAWN_STORE_KEY, JSON.stringify({
+                    x,
+                    z,
+                    yaw,
+                    t: Date.now(),
+                }));
+            } catch (_) { /* ignore */ }
+        }
+
+        function readSavedSpawn() {
+            try {
+                const raw = localStorage.getItem(SPAWN_STORE_KEY);
+                if (!raw) return null;
+                const d = JSON.parse(raw);
+                if (!d || typeof d !== 'object') return null;
+                const x = Number(d.x);
+                const z = Number(d.z);
+                const yaw = Number(d.yaw);
+                if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(yaw)) return null;
+                return { x, z, yaw };
+            } catch (_) {
+                return null;
+            }
+        }
+
         function createPlayer() {
             player = makeHuman(0x1a4f8a, 0x1a2a3a);
             player.position.set(0, 0, 108);
+            const saved = readSavedSpawn();
+            if (saved) {
+                player.position.set(saved.x, 0, saved.z);
+                playerYaw = saved.yaw;
+                player.rotation.y = saved.yaw;
+            }
             player.userData.nameTag = createNameTag(localNickname);
             player.userData.nameTag.position.set(0, 2.7, 0);
             player.add(player.userData.nameTag);
+            // ilk görünüm: applied
+            applyAppliedAppearanceToPlayer();
             scene.add(player);
         }
 
@@ -2686,6 +3222,12 @@ import { createMultiplayerClient } from './multiplayer.js';
             avatar.rotation.y = p.yaw || 0;
             avatar.userData.target = new THREE.Vector3(avatar.position.x, avatar.position.y, avatar.position.z);
             avatar.userData.targetYaw = avatar.rotation.y;
+            avatar.userData.appearance = {
+                bc: Number.isFinite(p?.bc) ? p.bc : null,
+                face: typeof p?.face === 'string' ? p.face : null
+            };
+            if (Number.isFinite(p?.bc)) setHumanBodyColor(avatar, p.bc);
+            if (typeof p?.face === 'string') setHumanFace(avatar, p.face);
             avatar.userData.nameTag = createNameTag(p.nickname || 'Oyuncu');
             avatar.userData.nameTag.position.set(0, 2.7, 0);
             avatar.add(avatar.userData.nameTag);
@@ -2914,7 +3456,7 @@ import { createMultiplayerClient } from './multiplayer.js';
             const btnW = 320;
             const btnH = 112;
             const btnX = (W - btnW) / 2;
-            const btnY = 230;
+            const btnY = 200;
             c.fillStyle = 'rgba(64, 168, 98, 0.30)';
             c.fillRect(btnX, btnY, btnW, btnH);
             c.strokeStyle = 'rgba(126, 255, 164, 0.92)';
@@ -2923,6 +3465,19 @@ import { createMultiplayerClient } from './multiplayer.js';
             c.fillStyle = '#eaffef';
             c.font = 'bold 48px Arial';
             c.fillText('TAMAM', btnX + 72, btnY + 74);
+
+            const reloadY = btnY + btnH + 18;
+            c.fillStyle = 'rgba(90, 140, 255, 0.22)';
+            c.fillRect(btnX, reloadY, btnW, btnH);
+            c.strokeStyle = 'rgba(140, 190, 255, 0.85)';
+            c.lineWidth = 3;
+            c.strokeRect(btnX, reloadY, btnW, btnH);
+            c.fillStyle = '#e9f2ff';
+            c.font = 'bold 34px Arial';
+            c.fillText('YENİLE', btnX + 78, reloadY + 72);
+            c.fillStyle = '#bcd6ff';
+            c.font = '20px Arial';
+            c.fillText('Aynı yerden başla', btnX + 78, reloadY + 100);
 
             c.fillStyle = '#9ed3ff';
             c.font = '22px Arial';
@@ -2999,9 +3554,19 @@ import { createMultiplayerClient } from './multiplayer.js';
             const btnW = 320;
             const btnH = 112;
             const btnX = (W - btnW) / 2;
-            const btnY = 230;
+            const btnY = 200;
+            const reloadY = btnY + btnH + 18;
             const inOk = x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH;
-            if (!inOk) return false;
+            const inReload = x >= btnX && x <= btnX + btnW && y >= reloadY && y <= reloadY + btnH;
+            if (!inOk && !inReload) return false;
+
+            if (inReload) {
+                saveSpawnForReload();
+                vrInputCooldownUntil = performance.now() + 450;
+                try { location.reload(); } catch (_) { /* ignore */ }
+                return true;
+            }
+
             closeVrChessResult();
             softResetChessForReplay();
             vrInputCooldownUntil = performance.now() + 450;
@@ -3252,6 +3817,16 @@ import { createMultiplayerClient } from './multiplayer.js';
                             localUserId = p.userId || null;
                             player.position.set(p.x, p.y, p.z);
                             playerYaw = p.yaw || 0;
+                            // Sunucudan görünüm geldiyse uygula (yoksa varsayılan kalır)
+                            if (Number.isFinite(p?.bc)) {
+                                const idx = BODY_COLORS.findIndex((c) => c.hex === p.bc);
+                                if (idx >= 0) appearanceApplied.bodyIdx = idx;
+                            }
+                            if (typeof p?.face === 'string') {
+                                const idx = FACE_PRESETS.findIndex((f) => f.id === p.face);
+                                if (idx >= 0) appearanceApplied.faceIdx = idx;
+                            }
+                            applyAppliedAppearanceToPlayer();
                             return;
                         }
                         if (!remotePlayers.has(p.id)) createRemotePlayer(p);
@@ -3271,6 +3846,18 @@ import { createMultiplayerClient } from './multiplayer.js';
                     }
                     avatar.userData.target.set(p.x, p.y, p.z);
                     avatar.userData.targetYaw = p.yaw || 0;
+                    const nextBc = Number.isFinite(p?.bc) ? p.bc : null;
+                    const nextFace = typeof p?.face === 'string' ? p.face : null;
+                    const cur = avatar.userData.appearance || {};
+                    if (nextBc !== null && cur.bc !== nextBc) {
+                        cur.bc = nextBc;
+                        setHumanBodyColor(avatar, nextBc);
+                    }
+                    if (nextFace && cur.face !== nextFace) {
+                        cur.face = nextFace;
+                        setHumanFace(avatar, nextFace);
+                    }
+                    avatar.userData.appearance = cur;
                 },
                 onPlayerLeft: (id) => removeRemotePlayer(id),
                 onOnlineUsers: (users) => {
@@ -3448,19 +4035,144 @@ import { createMultiplayerClient } from './multiplayer.js';
             `;
         }
 
+        function drawFaceToCanvas(ctx, faceId = 'neutral') {
+            const W = ctx.canvas.width;
+            const H = ctx.canvas.height;
+            ctx.clearRect(0, 0, W, H);
+
+            // Zemin: beyaz doldur (texture siyaha çarpmasın).
+            // Not: StandardMaterial'da map alpha'sı rengi "boş bırakmaz"; boş piksel siyah görünür.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, W, H);
+
+            const cx = W / 2;
+            const cy = H / 2;
+
+            // Gözler
+            const eyeY = cy - H * 0.10;
+            const eyeDX = W * 0.16;
+            const eyeR = W * 0.042;
+            ctx.fillStyle = 'rgba(18, 18, 18, 0.95)';
+            ctx.beginPath(); ctx.arc(cx - eyeDX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(cx + eyeDX, eyeY, eyeR, 0, Math.PI * 2); ctx.fill();
+
+            // Kaşlar / göz ifadeleri
+            ctx.strokeStyle = 'rgba(10,10,10,0.75)';
+            ctx.lineWidth = W * 0.020;
+            ctx.lineCap = 'round';
+            const browY = eyeY - H * 0.065;
+            const browW = W * 0.16;
+            const browH = H * 0.04;
+            // Kullanıcı geri bildirimi: sad/angry ters görünüyordu → çizim mantığını düzelt.
+            const browTilt = faceId === 'sad' ? 1 : faceId === 'angry' ? -1 : 0;
+            ctx.beginPath();
+            ctx.moveTo(cx - eyeDX - browW * 0.45, browY + browH * browTilt);
+            ctx.lineTo(cx - eyeDX + browW * 0.45, browY - browH * browTilt);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx + eyeDX - browW * 0.45, browY - browH * browTilt);
+            ctx.lineTo(cx + eyeDX + browW * 0.45, browY + browH * browTilt);
+            ctx.stroke();
+
+            // Ağız
+            const mouthY = cy + H * 0.14;
+            const mouthW = W * 0.34;
+            const mouthH = H * 0.10;
+            ctx.strokeStyle = 'rgba(15, 15, 15, 0.85)';
+            ctx.lineWidth = W * 0.030;
+            ctx.beginPath();
+            if (faceId === 'happy') {
+                ctx.arc(cx, mouthY, mouthW * 0.46, 0.12 * Math.PI, 0.88 * Math.PI, false);
+            } else if (faceId === 'angry') {
+                ctx.arc(cx, mouthY + mouthH * 0.85, mouthW * 0.46, 1.12 * Math.PI, 1.88 * Math.PI, false);
+            } else if (faceId === 'sad') {
+                ctx.moveTo(cx - mouthW * 0.34, mouthY + mouthH * 0.12);
+                ctx.lineTo(cx + mouthW * 0.34, mouthY + mouthH * 0.12);
+            } else {
+                ctx.moveTo(cx - mouthW * 0.28, mouthY);
+                ctx.lineTo(cx + mouthW * 0.28, mouthY);
+            }
+            ctx.stroke();
+
+            // Yanaklar (mutlu)
+            if (faceId === 'happy') {
+                ctx.fillStyle = 'rgba(255, 120, 140, 0.18)';
+                ctx.beginPath(); ctx.arc(cx - W * 0.25, cy + H * 0.02, W * 0.08, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(cx + W * 0.25, cy + H * 0.02, W * 0.08, 0, Math.PI * 2); ctx.fill();
+            }
+        }
+
+        function setHumanFace(h, faceId) {
+            if (!h?.userData?.faceTex?.ctx || !h?.userData?.faceTex?.texture) return;
+            h.userData.faceTex.id = faceId;
+            drawFaceToCanvas(h.userData.faceTex.ctx, faceId);
+            h.userData.faceTex.texture.needsUpdate = true;
+        }
+
+        function setHumanBodyColor(h, hex) {
+            if (!h) return;
+            const mats = [];
+            if (h.torso?.material) mats.push(h.torso.material);
+            if (h.lArm?.material) mats.push(h.lArm.material);
+            if (h.rArm?.material) mats.push(h.rArm.material);
+            mats.forEach((m) => {
+                if (m?.color?.setHex) m.color.setHex(hex);
+            });
+        }
+
         function makeHuman(bc, lc) {
             const g = new THREE.Group();
-            const sk = worldStd(0x8b5a3b, 0.76);
+            const skinBase = worldStd(0x8b5a3b, 0.76);
             const bm = worldStd(bc, 0.74);
             const lm = worldStd(lc, 0.78);
             const sm = worldStd(0x1a1a1a, 0.72);
             const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = !IS_MOB; g.add(m); return m };
-            g.torso = add(new THREE.BoxGeometry(.62, .82, .32), bm, 0, 1.22, 0); g.head = add(new THREE.BoxGeometry(.44, .44, .44), sk, 0, 1.95, 0);
+
+            // Yüz için canvas texture (ifadeler buradan değişecek)
+            const faceCanvas = document.createElement('canvas');
+            faceCanvas.width = 256;
+            faceCanvas.height = 256;
+            const faceCtx = faceCanvas.getContext('2d');
+            const faceTex = new THREE.CanvasTexture(faceCanvas);
+            faceTex.colorSpace = THREE.SRGBColorSpace;
+            faceTex.needsUpdate = true;
+            const skinPlain = new THREE.MeshStandardMaterial({
+                color: skinBase.color.clone(),
+                roughness: skinBase.roughness,
+                metalness: skinBase.metalness
+            });
+            const skinWithFace = new THREE.MeshStandardMaterial({
+                color: skinBase.color.clone(),
+                roughness: skinBase.roughness,
+                metalness: skinBase.metalness,
+                map: faceTex
+            });
+
+            g.torso = add(new THREE.BoxGeometry(.62, .82, .32), bm, 0, 1.22, 0);
+            // BoxGeometry materyal sırası: [right, left, top, bottom, front, back]
+            // Yüz dokusu sadece "back" yüzünde olsun (ilerleme yönünün tersi).
+            g.head = add(new THREE.BoxGeometry(.44, .44, .44), [
+                skinPlain,
+                skinPlain.clone(),
+                skinPlain.clone(),
+                skinPlain.clone(),
+                skinPlain.clone(),
+                skinWithFace
+            ], 0, 1.95, 0);
             g.lArm = add(new THREE.BoxGeometry(.18, .66, .18), bm, -.42, 1.14, 0);
             g.rArm = add(new THREE.BoxGeometry(.18, .66, .18), bm, .42, 1.14, 0);
-            g.lLeg = add(new THREE.BoxGeometry(.24, .72, .24), lm, -.18, .44, 0); g.rLeg = add(new THREE.BoxGeometry(.24, .72, .24), lm, .18, .44, 0);
-            add(new THREE.BoxGeometry(.26, .18, .34), sm, -.18, .06, .05); add(new THREE.BoxGeometry(.26, .18, .34), sm, .18, .06, .05);
-            g.walkPh = 0; return g;
+            g.lLeg = add(new THREE.BoxGeometry(.24, .72, .24), lm, -.18, .44, 0);
+            g.rLeg = add(new THREE.BoxGeometry(.24, .72, .24), lm, .18, .44, 0);
+            // Ayakkabı çıkıntısı: ileri yönde (-Z) baksın
+            add(new THREE.BoxGeometry(.26, .18, .34), sm, -.18, .06, -.05);
+            add(new THREE.BoxGeometry(.26, .18, .34), sm, .18, .06, -.05);
+
+            g.userData.faceTex = { id: 'neutral', canvas: faceCanvas, ctx: faceCtx, texture: faceTex };
+            drawFaceToCanvas(faceCtx, 'neutral');
+            faceTex.needsUpdate = true;
+
+            g.walkPh = 0;
+            return g;
         }
 
         function walkAnim(h, dt, mv) {
@@ -3485,10 +4197,20 @@ import { createMultiplayerClient } from './multiplayer.js';
             const zones = [[0, 54, 13], [0, -18, 13], [-38, 2, 10], [38, 2, 10], [0, -36, 8], [-12, 42, 8], [12, 42, 8], [-55, -20, 8], [55, -20, 8]];
             const npcCount = IS_QUEST ? Math.min(8, CFG.npcCount) : CFG.npcCount;
             for (let i = 0; i < npcCount; i++) {
-                const [zx, zz, zr] = zones[i % zones.length], a = Math.random() * Math.PI * 2, r = Math.random() * zr;
+                const [zx, zz, zr] = zones[i % zones.length];
+                let a = 0, r = 0, sx = zx, sz = zz;
+                // Spawn noktasını bina/anıt içinden kaçır (özellikle dairesel anıt collider).
+                let tries = 0;
+                do {
+                    a = Math.random() * Math.PI * 2;
+                    r = Math.random() * zr;
+                    sx = zx + Math.cos(a) * r;
+                    sz = zz + Math.sin(a) * r;
+                    tries++;
+                } while (inBldg(sx, sz, 1.15) && tries < 40);
                 const npc = makeHuman(NPC_COLORS[i % NPC_COLORS.length], 0x1a2a3a);
-                npc.position.set(zx + Math.cos(a) * r, 0, zz + Math.sin(a) * r);
-                npc.userData = { target: new THREE.Vector3(zx + Math.cos(a) * r, 0, zz + Math.sin(a) * r), state: 'walk', stateT: Math.random() * 5, greetT: 0, speed: CFG.npcSpeed * (.7 + Math.random() * .65), bubble: null, bubbleExpiry: 0 };
+                npc.position.set(sx, 0, sz);
+                npc.userData = { target: new THREE.Vector3(sx, 0, sz), state: 'walk', stateT: Math.random() * 5, greetT: 0, speed: CFG.npcSpeed * (.7 + Math.random() * .65), bubble: null, bubbleExpiry: 0 };
                 scene.add(npc); npcs.push(npc); pickTarget(npc);
             }
         }
@@ -3575,6 +4297,17 @@ import { createMultiplayerClient } from './multiplayer.js';
                 if (xrActive) updateVRRaycast();
             }
 
+            // VR için hafif zemin gölgesi (performans dostu).
+            if (vrBlobShadow) {
+                if (xrActive && xrRig) {
+                    vrBlobShadow.visible = true;
+                    vrBlobShadow.position.x = xrRig.position.x;
+                    vrBlobShadow.position.z = xrRig.position.z;
+                } else {
+                    vrBlobShadow.visible = false;
+                }
+            }
+
             if (isJumping || player.position.y > 0) {
                 jumpVel -= 18 * dt;
                 player.position.y = Math.max(0, player.position.y + jumpVel * dt);
@@ -3595,13 +4328,17 @@ import { createMultiplayerClient } from './multiplayer.js';
             netTimer += dt;
             if (mpClient && netTimer > 0.05) {
                 netTimer = 0;
+                const body = BODY_COLORS[appearanceApplied.bodyIdx] || BODY_COLORS[0];
+                const face = FACE_PRESETS[appearanceApplied.faceIdx] || FACE_PRESETS[0];
                 mpClient.sendMove({
                     x: player?.position?.x || 0,
                     y: player?.position?.y || 0,
                     z: player?.position?.z || 0,
                     yaw: playerYaw,
                     jumping: isJumping,
-                    running: isRunning
+                    running: isRunning,
+                    bc: body.hex,
+                    face: face.id
                 });
             }
 
@@ -3619,6 +4356,7 @@ import { createMultiplayerClient } from './multiplayer.js';
             drawMinimap();
             updateWaypointMarker(dt);
             if (xrActive && vrMenuWindow) updateVrMenuTransform(dt);
+            if (xrActive && vrCharWindow) updateVrCharTransform(dt);
 
             renderer.render(scene, camera);
         }
@@ -3690,6 +4428,42 @@ import { createMultiplayerClient } from './multiplayer.js';
            Sağ joystick  → 30° snap dönüş (konforlu VR)
         ══════════════════════════════════════════════ */
         let snapTurnReady = true; // Snap turn debounce
+        let vrMoveAxX = 0, vrMoveAxZ = 0; // filtreli joystick
+        let vrVelX = 0, vrVelZ = 0; // m/s (xrRig düzlem hızı)
+        const vrMoveForward = new THREE.Vector3();
+        const vrMoveRight = new THREE.Vector3();
+        const vrMoveVec = new THREE.Vector3();
+        const vrMoveOriginUp = new THREE.Vector3(0, 1, 0);
+        const vrCamDirTmp = new THREE.Vector3();
+
+        let vrBlobShadow = null;
+        let forceVrChessQueueUntil = 0;
+        function initVrBlobShadow() {
+            if (vrBlobShadow || !scene) return;
+            const geo = new THREE.CircleGeometry(1.25, 32);
+            const mat = new THREE.MeshBasicMaterial({
+                color: 0x000000,
+                transparent: true,
+                opacity: 0.16,
+                depthWrite: false
+            });
+            vrBlobShadow = new THREE.Mesh(geo, mat);
+            vrBlobShadow.rotation.x = -Math.PI / 2;
+            vrBlobShadow.position.y = 0.03;
+            vrBlobShadow.renderOrder = 2;
+            vrBlobShadow.visible = false;
+            scene.add(vrBlobShadow);
+        }
+
+        function forceShowVrChessQueueMenu(ms = 8000) {
+            const now = performance.now();
+            forceVrChessQueueUntil = Math.max(forceVrChessQueueUntil, now + ms);
+            const chSpot = SPOTS.find((s) => s.game === 'ch');
+            if (chSpot) activeSpot = chSpot;
+            initVrSpotWindow();
+            updateVrSpotWindow();
+            if (vrSpotWindow) vrSpotWindow.visible = !!(xrActive && !escMenuOpen && !vrCharOpen && !G.gameRunning && activeSpot);
+        }
 
         /** Bazı tarayıcılarda XRInputSourceArray üzerinde .some yok; for-of da hata verebilir. */
         function listXrInputSources(session) {
@@ -3773,6 +4547,42 @@ import { createMultiplayerClient } from './multiplayer.js';
                 updateVrChessResultWindow();
                 return;
             }
+
+            // VR karakter penceresi açıksa, sadece onu tıkla.
+            if (vrCharOpen && vrCharWindow?.visible) {
+                const inputSourcesList = listXrInputSources(session);
+                for (const src of inputSourcesList) {
+                    const gp = src.gamepad;
+                    if (!gp) continue;
+                    if (src.handedness === 'left') {
+                        const altGripDown = (gp.buttons?.[1]?.value || 0) > 0.42 || !!gp.buttons?.[1]?.pressed;
+                        if (!inputCoolingDown && altGripDown && !prevAltGripLeft && !vrCharToggleLatch) {
+                            setVrCharOpen(false);
+                            vrCharToggleLatch = true;
+                        } else if (!altGripDown) {
+                            vrCharToggleLatch = false;
+                        }
+                        prevAltGripLeft = altGripDown;
+                    }
+                    const triggerVal = gp.buttons?.[0]?.value || 0;
+                    const triggerClick = !!gp.buttons?.[0]?.pressed || triggerVal > 0.85;
+                    const clickPressed = !!gp.buttons?.[4]?.pressed || !!gp.buttons?.[3]?.pressed || triggerClick;
+                    const clickJustDown = !inputCoolingDown && clickPressed && (
+                        src.handedness === 'left' ? !prevClickLeft : !prevClickRight
+                    );
+                    if (src.handedness === 'left') {
+                        vrCharPointerLeft = getVrCharHit(src, session);
+                        if (clickJustDown && vrCharPointerLeft) clickVrCharAt(vrCharPointerLeft);
+                        prevClickLeft = clickPressed;
+                    } else if (src.handedness === 'right') {
+                        vrCharPointerRight = getVrCharHit(src, session);
+                        if (clickJustDown && vrCharPointerRight) clickVrCharAt(vrCharPointerRight);
+                        prevClickRight = clickPressed;
+                    }
+                }
+                updateVrCharWindow();
+                return;
+            }
             if (escMenuOpen) {
                 vrMenuPointerLeft = null;
                 vrMenuPointerRight = null;
@@ -3800,12 +4610,16 @@ import { createMultiplayerClient } from './multiplayer.js';
                     const altGripDown = (gp.buttons?.[1]?.value || 0) > 0.42 || !!gp.buttons?.[1]?.pressed;
                     if (altGripDown && !prevAltGripLeft) {
                         if (!(vrChessStandalone && G.gameRunning && vrChessStandalone.onSqueezeStart(xrCtrl0))) {
-                            tryGrabObject('left');
+                            if (!inputCoolingDown && !vrCharToggleLatch) {
+                                setVrCharOpen(!vrCharOpen);
+                                vrCharToggleLatch = true;
+                            }
                         }
                     } else if (!altGripDown && prevAltGripLeft) {
                         if (!(vrChessStandalone && G.gameRunning && vrChessStandalone.onSqueezeEnd())) {
-                            releaseGrabbedObject('left');
+                            // left grip: toggle only
                         }
+                        vrCharToggleLatch = false;
                     }
                     prevAltGripLeft = altGripDown;
 
@@ -3877,31 +4691,53 @@ import { createMultiplayerClient } from './multiplayer.js';
                         axZ = gp.axes?.[1] ?? 0;
                     }
 
-                    if (Math.abs(axX) > VR_DEADZONE || Math.abs(axZ) > VR_DEADZONE) {
-                        // Headset'in baktığı yönü al
-                        const xrCamera = renderer.xr.getCamera(camera);
-                        const forward = new THREE.Vector3();
-                        const right = new THREE.Vector3();
-                        xrCamera.getWorldDirection(forward);
-                        forward.y = 0;
-                        forward.normalize();
-                        right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+                    // Joystick filtreleme + yumuşak hız (VR'da kasılma/titreme azaltır)
+                    const rawX = Math.abs(axX) > VR_DEADZONE ? axX : 0;
+                    const rawZ = Math.abs(axZ) > VR_DEADZONE ? axZ : 0;
+                    const kInput = 1 - Math.exp(-dt * 18);
+                    vrMoveAxX += (rawX - vrMoveAxX) * kInput;
+                    vrMoveAxZ += (rawZ - vrMoveAxZ) * kInput;
 
-                        // Joystick girdisini baş yönüne göre harekete çevir
-                        const move = new THREE.Vector3();
-                        const runMul = triggerVal > 0.7 ? 1.8 : 1;
-                        isRunning = runMul > 1;
-                        move.addScaledVector(forward, -axZ * VR_WALK_SPEED * runMul * dt);
-                        move.addScaledVector(right, axX * VR_WALK_SPEED * runMul * dt);
+                    const ease = (v) => {
+                        const s = Math.max(-1, Math.min(1, v));
+                        const a = Math.abs(s);
+                        const e = a * a * (3 - 2 * a); // smoothstep
+                        return Math.sign(s) * e;
+                    };
+                    const ix = ease(vrMoveAxX);
+                    const iz = ease(vrMoveAxZ);
 
-                        let nx = xrRig.position.x + move.x;
-                        let nz = xrRig.position.z + move.z;
+                    const hasMove = Math.abs(ix) > 0.001 || Math.abs(iz) > 0.001;
+                    const runMul = triggerVal > 0.7 ? 1.8 : 1;
+                    isRunning = runMul > 1;
+
+                    // Headset yön vektörleri (alloc yapmadan)
+                    const xrCamera = renderer.xr.getCamera(camera);
+                    xrCamera.getWorldDirection(vrCamDirTmp);
+                    vrCamDirTmp.y = 0;
+                    vrCamDirTmp.normalize();
+                    vrMoveForward.copy(vrCamDirTmp);
+                    vrMoveRight.crossVectors(vrMoveForward, vrMoveOriginUp).normalize();
+
+                    const targetVX = (vrMoveRight.x * ix + vrMoveForward.x * (-iz)) * VR_WALK_SPEED * runMul;
+                    const targetVZ = (vrMoveRight.z * ix + vrMoveForward.z * (-iz)) * VR_WALK_SPEED * runMul;
+
+                    const kVel = 1 - Math.exp(-dt * (hasMove ? 10 : 14));
+                    vrVelX += (targetVX - vrVelX) * kVel;
+                    vrVelZ += (targetVZ - vrVelZ) * kVel;
+
+                    if (Math.abs(vrVelX) > 0.0005 || Math.abs(vrVelZ) > 0.0005) {
+                        vrMoveVec.set(vrVelX * dt, 0, vrVelZ * dt);
+
+                        let nx = xrRig.position.x + vrMoveVec.x;
+                        let nz = xrRig.position.z + vrMoveVec.z;
                         nx = Math.max(-94, Math.min(94, nx));
                         nz = Math.max(-98, Math.min(118, nz));
                         if (onlineChess.active && !isInsideChessBoundary(nx, nz)) {
                             openChessExitConfirm();
                             nx = xrRig.position.x;
                             nz = xrRig.position.z;
+                            vrVelX = 0; vrVelZ = 0;
                         }
                         if (!inBldg(nx, xrRig.position.z, .75)) xrRig.position.x = nx;
                         if (!inBldg(xrRig.position.x, nz, .75)) xrRig.position.z = nz;
@@ -4018,6 +4854,21 @@ import { createMultiplayerClient } from './multiplayer.js';
         /* ════════════════ VR RAYCAST ══════════════════ */
         function updateVRRaycast() {
             if (!xrRig) return;
+            // Maç bitişi gibi durumlarda satranç kuyruğu menüsünü kısa süre zorla göster.
+            if (performance.now() < forceVrChessQueueUntil) {
+                const chSpot = SPOTS.find((s) => s.game === 'ch');
+                if (chSpot) {
+                    activeSpot = chSpot;
+                    requestChessQueueState();
+                    updateChessQueueUi();
+                    initVrSpotWindow();
+                    if (vrSpotWindow) {
+                        vrSpotWindow.visible = !!(xrActive && !escMenuOpen && !vrCharOpen && !G.gameRunning && activeSpot);
+                        if (vrSpotWindow.visible) updateVrSpotWindow();
+                    }
+                }
+                return;
+            }
 
             // Masaya yakınlık: rig / ayak pozisyonu (sağ el konumu değil) — masadayken etkileşim kaçmasın
             const px = xrRig.position.x;
@@ -4042,7 +4893,7 @@ import { createMultiplayerClient } from './multiplayer.js';
             }
             // VR'da HTML prompt yerine ESC mantigindaki raycast tiklama penceresi kullan.
             if (vrSpotWindow) {
-                vrSpotWindow.visible = !!(xrActive && !escMenuOpen && !G.gameRunning && activeSpot);
+                vrSpotWindow.visible = !!(xrActive && !escMenuOpen && !vrCharOpen && !G.gameRunning && activeSpot);
                 if (vrSpotWindow.visible) updateVrSpotWindow();
             }
         }
@@ -4191,10 +5042,43 @@ import { createMultiplayerClient } from './multiplayer.js';
                     const [mx, mz] = tm(sp.pos.x, sp.pos.z);
                     ctx.fillStyle = '#ffdd44'; ctx.beginPath(); ctx.arc(mx, mz, 3.5, 0, Math.PI * 2); ctx.fill();
                 });
-                BUILDINGS.forEach(({ x, z, w, d }, i) => {
-                    const [mx, mz] = tm(x, z), bw = w * sc, bd = d * sc, bx2 = mx - bw / 2, bz = mz - bd / 2, isHL = (i === highlightIdx);
-                    if (isHL && blinkOn) { ctx.shadowColor = '#e8c870'; ctx.shadowBlur = 10; ctx.fillStyle = '#ffe97a'; ctx.fillRect(bx2 - 2, bz - 2, bw + 4, bd + 4); ctx.shadowBlur = 0; }
-                    ctx.fillStyle = isHL ? '#e8c870' : '#6888b8'; ctx.fillRect(bx2, bz, bw, bd);
+                BUILDINGS.forEach((b, i) => {
+                    const isHL = (i === highlightIdx);
+                    if (b.mapPolygon && b.mapPolygon.length >= 3) {
+                        ctx.beginPath();
+                        const [mx0, mz0] = tm(b.mapPolygon[0].x, b.mapPolygon[0].z);
+                        ctx.moveTo(mx0, mz0);
+                        for (let k = 1; k < b.mapPolygon.length; k++) {
+                            const [mx, mz] = tm(b.mapPolygon[k].x, b.mapPolygon[k].z);
+                            ctx.lineTo(mx, mz);
+                        }
+                        ctx.closePath();
+                        if (isHL && blinkOn) {
+                            ctx.shadowColor = '#e8c870';
+                            ctx.shadowBlur = 10;
+                            ctx.fillStyle = '#ffe97a';
+                            ctx.fill();
+                            ctx.shadowBlur = 0;
+                        }
+                        ctx.fillStyle = isHL ? '#e8c870' : (b.css || '#6888b8');
+                        ctx.fill();
+                    } else {
+                        const { x, z, w, d } = b;
+                        const [mx, mz] = tm(x, z);
+                        const bw = w * sc;
+                        const bd = d * sc;
+                        const bx2 = mx - bw / 2;
+                        const bz = mz - bd / 2;
+                        if (isHL && blinkOn) {
+                            ctx.shadowColor = '#e8c870';
+                            ctx.shadowBlur = 10;
+                            ctx.fillStyle = '#ffe97a';
+                            ctx.fillRect(bx2 - 2, bz - 2, bw + 4, bd + 4);
+                            ctx.shadowBlur = 0;
+                        }
+                        ctx.fillStyle = isHL ? '#e8c870' : (b.css || '#6888b8');
+                        ctx.fillRect(bx2, bz, bw, bd);
+                    }
                 });
                 if (waypointTargetIdx >= 0 && BUILDINGS[waypointTargetIdx]) {
                     const wb = BUILDINGS[waypointTargetIdx];
@@ -4489,7 +5373,7 @@ import { createMultiplayerClient } from './multiplayer.js';
         /* ════════════════════════════════════════════════
            ══ MINI GAME ENGINE ═════════════════════════
         ════════════════════════════════════════════════ */
-        let currentGame = null, currentGameId = null, currentGameTitle = null;
+        let currentGame = null, currentGameId = null, currentGameTitle = null, currentGameType = null;
         function setupMiniGames() { setupScoreModal(); }
 
         function clearVrChess() {
@@ -4517,7 +5401,8 @@ import { createMultiplayerClient } from './multiplayer.js';
             if (xrActive) {
                 initVrSpotWindow();
                 updateVrSpotWindow();
-                if (vrSpotWindow) vrSpotWindow.visible = !!(!escMenuOpen && activeSpot);
+                if (vrSpotWindow) vrSpotWindow.visible = !!(!escMenuOpen && !vrCharOpen && activeSpot);
+                forceShowVrChessQueueMenu(12000);
             } else {
                 const prompt = document.getElementById('interact-prompt');
                 if (prompt && activeSpot?.game === 'ch') prompt.style.display = 'block';
@@ -4530,6 +5415,7 @@ import { createMultiplayerClient } from './multiplayer.js';
             if (vrSpotWindow) vrSpotWindow.visible = false;
             currentGameId = id;
             currentGameTitle = title;
+            currentGameType = type;
             if (IS_MOB) {
                 resetJoy(); LOOK.active = false; LOOK.id = -1;
                 ['joy-base', 'joy-label', 'm-bldg-btn', 'm-map-btn', 'm-lb-btn'].forEach(id2 => {
@@ -4601,6 +5487,8 @@ import { createMultiplayerClient } from './multiplayer.js';
 
         function endGame(score = -1) {
             if (G.gameRaf) { cancelAnimationFrame(G.gameRaf); G.gameRaf = null; }
+            const endedType = currentGameType;
+            const endedTitle = currentGameTitle;
             if (score === -1 && currentGame) {
                 if (currentGame.totalScore !== undefined) score = currentGame.totalScore;
                 else if (currentGame.score !== undefined) score = currentGame.score;
@@ -4621,7 +5509,14 @@ import { createMultiplayerClient } from './multiplayer.js';
                     const el = document.getElementById(id2); if (el) el.style.display = 'block';
                 });
             }
-            if (score >= 0) showScoreModal(currentGameId, currentGameTitle, score);
+            // VR satranç (local) bitince: "satranca yaklaşınca çıkan" VR spot penceresini tekrar göster.
+            // (Bu pencere, oyunu tekrar başlatma/menü gibi akışlar için zaten kullanılıyor.)
+            if (xrActive && endedType === 'ch') {
+                softResetChessForReplay();
+                return;
+            }
+
+            if (score >= 0) showScoreModal(currentGameId, endedTitle || currentGameTitle, score);
         }
 
         /* ════════════════ YARDIMCI FONKSİYONLAR ═══════ */

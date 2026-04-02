@@ -165,7 +165,9 @@ io.on('connection', (socket) => {
                 z: spawn.z,
                 yaw: 0,
                 jumping: false,
-                running: false
+                running: false,
+                bc: 0x1a4f8a,
+                face: 'neutral'
             };
             players.set(socket.id, player);
             playersByUserId.set(Number(user.id), player);
@@ -191,6 +193,9 @@ io.on('connection', (socket) => {
         cur.yaw = Number(next.yaw) || 0;
         cur.jumping = Boolean(next.jumping);
         cur.running = Boolean(next.running);
+        // Görünüm (isteğe bağlı)
+        if (Number.isFinite(next.bc)) cur.bc = Number(next.bc);
+        if (typeof next.face === 'string' && next.face) cur.face = String(next.face);
         socket.to(ROOM_ID).emit('player-moved', { ...cur });
     });
 

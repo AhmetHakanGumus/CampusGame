@@ -27,6 +27,8 @@ export const BUILDINGS = [
     { x: -30, z: -87, w: 19, h: 11, d: 15, color: 0x7aaac4, css: '#7aaac4', name: "Spor Salonu (BESYO)" },
     { x: 30, z: -87, w: 19, h: 11, d: 15, color: 0x7aaac4, css: '#7aaac4', name: "Sağlık Merkezi" },
     { x: 0, z: -33, w: 12, h: 5, d: 12, color: 0xc4b08a, css: '#c4b08a', name: "Güvenlik" },
+    // Gap-Yenev (3D: addGapYenev ~ x=36, z=50; harita: merkez daire + üç kanat, campus-app'te runtime'da)
+    { x: 36, z: 50, w: 16, h: 8, d: 14, color: 0xb89a6a, css: '#b89a6a', name: "Gap Yenev", mapPolygon: null },
 ];
 
 export const SPOTS = [
