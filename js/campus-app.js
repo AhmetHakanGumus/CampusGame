@@ -6,7 +6,7 @@ import {
     VR_WALK_SPEED, VR_TURN_SPEED, VR_DEADZONE, SNAP_ANGLE
 } from './config.js';
 import { applyPlatformDom } from './platform.js';
-import { initAudio, playBowDraw, playArrowShoot, playMurmur, playBeep, audio } from './audio.js';
+import { initAudio, playBowDraw, playArrowShoot, playMurmur, playBeep, audio, setChessAudioVrBoost } from './audio.js';
 import { TableTennis, FlappyBird, Penalti, Archery, Basketball } from './minigames/games.js';
 import { ChessGame } from './minigames/chess-game.js';
 import { VrChessStandalone } from './minigames/vr-chess-standalone.js';
@@ -251,6 +251,8 @@ import { createMultiplayerClient } from './multiplayer.js';
         let handEnvMap = null;
         let handTextureSet = null;
         let vrChessStandalone = null;
+        /** Son başlatılan VR satranç çevrimiçi maç mıydı? (yerel bitiş paneli yanlış tetiklenmesin) */
+        let lastVrChessWasOnlinePvp = false;
         let hasVrSessionSpawned = false;
         // VR'da göz seviyesi: biraz daha yukarı (daha rahat görüş).
         const VR_RIG_EYE_OFFSET = 0.42;
@@ -497,6 +499,7 @@ import { createMultiplayerClient } from './multiplayer.js';
             /* ── 6) VR oturum olayları ───────────────── */
             renderer.xr.addEventListener('sessionstart', () => {
                 xrActive = true;
+                setChessAudioVrBoost(true);
                 resetVrTransientInputState();
                 stopNonVRLoop();
 
@@ -569,6 +572,7 @@ import { createMultiplayerClient } from './multiplayer.js';
 
             renderer.xr.addEventListener('sessionend', () => {
                 xrActive = false;
+                setChessAudioVrBoost(false);
                 resetVrTransientInputState();
                 renderer.setAnimationLoop(null);
 
@@ -3088,18 +3092,20 @@ import { createMultiplayerClient } from './multiplayer.js';
             scene.add(bkG);
             addSpotMarker(bkPos.x, bkPos.z, '🏀');
 
-            // ── Satranç Masası ──────────────────────────
+            // ── Satranç Masası (dekoratif; VR oynanabilir tahta anchor.y ayrı ayarlanır) ──
             const chPos = SPOTS.find((spt) => spt.game === 'ch')?.pos;
             if (chPos) {
                 const chG = new THREE.Group();
                 const tableTopCh = bx(3.2, 0.14, 3.2, worldStd(0x4c321e, 0.82));
-                tableTopCh.position.set(0, 1.02, 0);
+                tableTopCh.position.set(0, 0.34, 0);
                 chG.add(tableTopCh);
                 const board = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.08, 2.1), worldStd(0xe5d7b5, 0.78));
-                board.position.set(0, 1.13, 0);
+                board.position.set(0, 0.45, 0);
                 chG.add(board);
+                const legH = 0.27;
+                const legY = legH * 0.5;
                 [[-1.25, -1.25], [1.25, -1.25], [-1.25, 1.25], [1.25, 1.25]].forEach(([lx, lz]) => {
-                    chG.add(cl(0.08, 0.08, 1.02, 6, 0x7a5c1e, lx, 0.51, lz));
+                    chG.add(cl(0.08, 0.08, legH, 6, 0x7a5c1e, lx, legY, lz));
                 });
                 chG.position.set(chPos.x, 0, chPos.z);
                 scene.add(chG);
@@ -3940,34 +3946,30 @@ import { createMultiplayerClient } from './multiplayer.js';
                     // VR'da maç bitince (rakip çıktı / mat) oyunu hemen kapat ki masaya yaklaşınca tekrar prompt çıksın.
                     // endGame(0) score modal tetikleyebilir; burada skor kaydı satranç için sunucuda yapılıyor.
                     closeChessExitConfirm();
-                    // Maç bitince VR/PC sonuç ekranı göster.
+                    // Maç bitince VR/PC sonuç ekranı (reason boş / DB alanı farklı gelse bile panel çıksın).
                     const reason = String(payload?.reason || '').toLowerCase();
-                    const isChessEnd = reason === 'checkmate' || reason === 'exit' || reason === 'stalemate';
-                    if (isChessEnd) {
-                        const winnerId = payload?.winnerUserId != null ? Number(payload.winnerUserId) : null;
-                        const me = localUserId != null ? Number(localUserId) : null;
-                        const winnerName = String(payload?.winnerUsername || '').trim().toLowerCase();
-                        const meName = String(localNickname || '').trim().toLowerCase();
-                        const iWon = (winnerId != null && me != null && winnerId === me) || (!!winnerName && !!meName && winnerName === meName);
-                        if (xrActive) {
-                            openVrChessResult({
-                                title: reason === 'stalemate'
-                                    ? 'Berabere!'
-                                    : (iWon ? 'Kazandın!' : 'Kaybettin!'),
-                                sub: reason === 'stalemate'
-                                    ? 'Oyun berabere bitti.'
-                                    : (iWon ? 'Tebrikler (50 puan)' : 'Bir dahaki sefere!')
-                            });
-                        } else {
-                            openChessResultModal({
-                                title: reason === 'stalemate'
-                                    ? 'Berabere!'
-                                    : (iWon ? 'Kazandınız!' : 'Kaybettiniz!'),
-                                sub: reason === 'stalemate'
-                                    ? 'Oyun berabere bitti.'
-                                    : (iWon ? 'Tebrikler (50 puan)' : 'Maçtan ayrıldın veya rakip kazandı.')
-                            });
-                        }
+                    const winnerId = payload?.winnerUserId != null ? Number(payload.winnerUserId) : null;
+                    const me = localUserId != null ? Number(localUserId) : null;
+                    const winnerName = String(payload?.winnerUsername || '').trim().toLowerCase();
+                    const meName = String(localNickname || '').trim().toLowerCase();
+                    const iWon = (winnerId != null && me != null && winnerId === me) || (!!winnerName && !!meName && winnerName === meName);
+                    let endTitle = 'Oyun bitti';
+                    let endSub = String(payload?.message || 'Maç sona erdi.');
+                    if (reason === 'stalemate') {
+                        endTitle = 'Berabere!';
+                        endSub = payload?.message || 'Oyun berabere bitti.';
+                    } else if (reason === 'checkmate' || reason === 'exit' || reason === 'disconnect' || reason === 'resign') {
+                        endTitle = iWon ? 'Kazandın!' : 'Kaybettin!';
+                        endSub = iWon ? 'Tebrikler (50 puan)' : (payload?.message || 'Bir dahaki sefere!');
+                    } else if (winnerId != null && me != null) {
+                        endTitle = iWon ? 'Kazandın!' : 'Kaybettin!';
+                        endSub = payload?.message || endSub;
+                    }
+                    if (xrActive) {
+                        openVrChessResult({ title: endTitle, sub: endSub });
+                    } else {
+                        const pcTitle = endTitle === 'Kazandın!' ? 'Kazandınız!' : (endTitle === 'Kaybettin!' ? 'Kaybettiniz!' : endTitle);
+                        openChessResultModal({ title: pcTitle, sub: endSub });
                     }
                     if (xrActive) {
                         // Bazı durumlarda G.gameRunning false kalabiliyor; yine de state'i temizle.
@@ -5447,14 +5449,15 @@ import { createMultiplayerClient } from './multiplayer.js';
             } else if (type === 'ch' && xrActive) {
                 try {
                     clearVrChess();
+                    lastVrChessWasOnlinePvp = options.mode === 'pvp';
                     const chSpot = SPOTS.find((s) => s.game === 'ch')?.pos || { x: 10, z: 42 };
                     currentGame = { destroy() {} };
                     vrChessStandalone = new VrChessStandalone({
                         scene,
                         anchor: {
                             x: chSpot.x,
-                            // Satranç seti zemine gömülmesin diye az havaya al.
-                            y: 1.18,
+                            // VR oynanabilir tahta (dekoratif masa ayrı; biraz yukarı).
+                            y: 0.56,
                             z: chSpot.z,
                             yaw: 0
                         },
@@ -5509,9 +5512,17 @@ import { createMultiplayerClient } from './multiplayer.js';
                     const el = document.getElementById(id2); if (el) el.style.display = 'block';
                 });
             }
-            // VR satranç (local) bitince: "satranca yaklaşınca çıkan" VR spot penceresini tekrar göster.
-            // (Bu pencere, oyunu tekrar başlatma/menü gibi akışlar için zaten kullanılıyor.)
+            // VR satranç (yerel iki oyuncu) bitince sonuç paneli; çevrimiçi maçta panel onChessMatchEnded'de açılır.
             if (xrActive && endedType === 'ch') {
+                if (!lastVrChessWasOnlinePvp && (score === 50 || score === 0)) {
+                    openVrChessResult({
+                        title: score === 50 ? 'Şah mat!' : 'Berabere!',
+                        sub: score === 50
+                            ? 'Aynı cihazda iki oyuncu — sıradaki oyunda renk değiştirin.'
+                            : 'Pat — oyun berabere bitti.'
+                    });
+                }
+                lastVrChessWasOnlinePvp = false;
                 softResetChessForReplay();
                 return;
             }

@@ -39,3 +39,6 @@ desktop.ini
 # Misc
 *.tmp
 *.temp
+
+# Cursor/Claude local worktrees (nested git repo; do not commit)
+.claude/

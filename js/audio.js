@@ -4,6 +4,12 @@ import { IS_MOB } from './config.js';
 
 export const audio = { ctx: null };
 
+/** `renderer.xr` oturumu açıkken true — satranç hamle sesi Web Audio ile güçlendirilir. */
+export let chessAudioVrBoost = false;
+export function setChessAudioVrBoost(on) {
+    chessAudioVrBoost = !!on;
+}
+
 export function initAudio() {
     const amb = new Audio();
     ['/Sounds/Sound_Effects_Outdoor.mp3'].forEach(src => {
@@ -95,6 +101,40 @@ export function playMurmur() {
     g.connect(audio.ctx.destination);
     o.start(now);
     o.stop(now + .7);
+}
+
+/** VR’da ekstra kazanç (HTML volume üst sınırı 1.0’ı aşmak için). */
+const CHESS_VR_GAIN = 2.75;
+
+/** Satranç taş hamlesi — HTML Audio (VR’da Web Audio gain ile daha yüksek). */
+export function playChessMove() {
+    try {
+        const a = new Audio('/Sounds/Chess.mp3');
+        if (chessAudioVrBoost) {
+            const ctx = audio.ctx || new (window.AudioContext || window.webkitAudioContext)();
+            if (!audio.ctx) audio.ctx = ctx;
+            a.volume = 1;
+            const src = ctx.createMediaElementSource(a);
+            const gain = ctx.createGain();
+            gain.gain.value = CHESS_VR_GAIN;
+            src.connect(gain);
+            gain.connect(ctx.destination);
+            const run = () => {
+                if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+                a.play().catch(() => {});
+            };
+            a.addEventListener('ended', () => {
+                try {
+                    src.disconnect();
+                    gain.disconnect();
+                } catch (_e) { /* yok */ }
+            }, { once: true });
+            run();
+        } else {
+            a.volume = IS_MOB ? 0.88 : 1;
+            a.play().catch(() => {});
+        }
+    } catch (_e) { /* yok */ }
 }
 
 export function playBeep(freq = 440, dur = .1, vol = .3) {

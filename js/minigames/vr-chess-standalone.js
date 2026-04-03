@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { Chess } from 'chess.js/dist/esm/chess.js';
+import { playChessMove } from '../audio.js';
 
 const PIECE_SYMBOLS = {
     K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙',
@@ -347,6 +348,7 @@ export class VrChessStandalone {
             onMoveTry: null
         };
         this.pendingMove = null;
+        this._lastFenForSound = null;
         this.resultMessage = '';
 
         // VR için satranç setini biraz daha yere yaklaştır (metre cinsinden).
@@ -450,7 +452,12 @@ export class VrChessStandalone {
             ? `${payload.checkBy} ${payload.checkedPlayer} oyuncusuna şah çekti`
             : '';
         if (payload.fen) {
+            const prevFen = this._lastFenForSound;
             this._loadFenToEngine(payload.fen);
+            if (prevFen != null && payload.fen !== prevFen) {
+                playChessMove();
+            }
+            this._lastFenForSound = payload.fen;
         }
     }
 
@@ -696,6 +703,7 @@ export class VrChessStandalone {
             } else {
                 this.chess.makeMove(fromR, fromC, row, col);
                 this._spawnAllPieces();
+                playChessMove();
             }
             this.clearHighlights();
             this.selectedPiece = null;
@@ -766,6 +774,7 @@ export class VrChessStandalone {
             } else {
                 this.chess.makeMove(fromR, fromC, nearestRow, nearestCol);
                 this._spawnAllPieces();
+                playChessMove();
             }
             this.clearHighlights();
             this.selectedPiece = null;

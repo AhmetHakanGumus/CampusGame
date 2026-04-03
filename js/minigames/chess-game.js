@@ -1,6 +1,7 @@
 'use strict';
 
 import { Chess } from 'chess.js/dist/esm/chess.js';
+import { playChessMove } from '../audio.js';
 import { G } from '../runtime.js';
 
 function cancelDragState(self) {
@@ -80,6 +81,9 @@ export class ChessGame {
             } catch (_err) {
                 this.chess.reset();
             }
+            this._lastFenForSound = payload.fen;
+        } else {
+            this._lastFenForSound = this.chess.fen();
         }
     }
 
@@ -91,9 +95,14 @@ export class ChessGame {
         if (payload.matchId != null) this.matchId = payload.matchId;
         this.waitingOpponent = false;
         if (payload.fen) {
+            const prevFen = this._lastFenForSound;
             try {
                 this.chess.load(payload.fen);
             } catch (_err) {}
+            if (prevFen != null && payload.fen !== prevFen) {
+                playChessMove();
+            }
+            this._lastFenForSound = payload.fen;
         }
         this.pendingMove = null;
         if (payload.checkBy && payload.checkedPlayer) {
@@ -199,6 +208,7 @@ export class ChessGame {
             });
             return true;
         }
+        playChessMove();
         this.postMove();
         return true;
     }
