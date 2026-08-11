@@ -3,7 +3,6 @@
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
-
 function makeStoneBlockTexture(THREE) {
     const cv = document.createElement('canvas');
     cv.width = 1024;
@@ -147,18 +146,13 @@ export function addUniversityMainGate({ scene, IS_MOB, buildingAABBs }) {
                 logo.position.set(0, boxF.max.y - sizeF.y * 0.2, boxF.max.z - sizeF.z * 0.06);
                 obj.add(logo);
 
-                // Collider (AABB) ayarları: modelin ölçüsünden hesapla.
-                // Mantık: kapıyı X ekseninde duvar/geçiş parçalarına böl ve sadece duvarlara AABB ekle.
-                // Z ekseninde iki katman:
-                // - Ana duvarlar biraz geride (zWall0..zWall1)
-                // - Öne taşan merkez çıkıntı (zNose0..zNose1)
+                // Collider (AABB): kapıyı X ekseninde duvar/geçiş parçalarına böl; geçit boşlukları açık kalsın.
+                // Z: ana duvarlar (zWall) + öne taşan merkez çıkıntı (zNose).
                 if (Array.isArray(buildingAABBs)) {
                     const depth = Math.max(1, sizeF.z);
                     const cx = (boxF.min.x + boxF.max.x) * 0.5;
                     const halfW = sizeF.x * 0.5;
                     const zHalf = depth * 0.5;
-                    // Z ekseninde local/world kayma olmaması için GATE_Z merkezli hesapla.
-                    // Ana duvarlar biraz geride, merkez çıkıntı ise öne doğru uzansın.
                     const zWall0 = GATE_Z - zHalf * 0.92;
                     const zWall1 = GATE_Z + zHalf * 0.26;
                     const zNose0 = GATE_Z + zHalf * 0.18;
@@ -167,7 +161,7 @@ export function addUniversityMainGate({ scene, IS_MOB, buildingAABBs }) {
                     const centerHalf = halfW * 0.08;
                     const bigOpening = halfW * 0.32;
                     const thinWall = halfW * 0.12;
-                    const smallOpening = halfW * 0.20;
+                    const smallOpening = halfW * 0.2;
 
                     const rightThin0 = cx + centerHalf + bigOpening;
                     const rightThin1 = rightThin0 + thinWall;
@@ -186,13 +180,11 @@ export function addUniversityMainGate({ scene, IS_MOB, buildingAABBs }) {
                         buildingAABBs.push({ x0: a, x1: b, z0, z1 });
                     };
 
-                    // Soldan sağa: kalın duvar | küçük giriş | duvar | büyük giriş | duvar | büyük giriş | duvar | küçük giriş | kalın duvar
-                    pushWall(cx - centerHalf, cx + centerHalf); // merkez duvar
-                    pushWall(leftThin0, leftThin1); // sol ince duvar
-                    pushWall(rightThin0, rightThin1); // sağ ince duvar
-                    pushWall(leftOuter0, leftOuter1); // sol kalın dış duvar
-                    pushWall(rightOuter0, rightOuter1); // sağ kalın dış duvar
-                    // Merkez duvarın öne taşan çıkıntısı.
+                    pushWall(cx - centerHalf, cx + centerHalf);
+                    pushWall(leftThin0, leftThin1);
+                    pushWall(rightThin0, rightThin1);
+                    pushWall(leftOuter0, leftOuter1);
+                    pushWall(rightOuter0, rightOuter1);
                     pushWall(cx - centerHalf * 1.05, cx + centerHalf * 1.05, zNose0, zNose1);
                 }
 

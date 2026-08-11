@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { createUser, findUserByUsername } from '../models/user.model.js';
 import { hashPassword, verifyPassword } from '../security/password.js';
 import { createLoginSession, isUsernameOnline } from '../session.store.js';
+import { sanitizeUsernameForAuth } from '../inputValidation.js';
 
 const GUEST_COOKIE = 'vr_guest_user';
 const GUEST_USERNAME_RE = /^Misafir\d{5}$/;
@@ -24,20 +25,27 @@ export async function register(req, res) {
             return res.status(400).json({ message: 'username ve password zorunlu.' });
         }
 
-        if (GUEST_USERNAME_RE.test(String(username).trim())) {
+        const safeUser = sanitizeUsernameForAuth(username);
+        if (!safeUser) {
+            return res.status(400).json({
+                message: 'Kullanıcı adı 3–64 karakter; yalnızca harf, rakam ve alt çizgi kullanılabilir.'
+            });
+        }
+
+        if (GUEST_USERNAME_RE.test(safeUser)) {
             return res
                 .status(400)
                 .json({ message: 'Bu kullanıcı adı misafir hesapları için ayrılmıştır.' });
         }
 
-        if (String(username).length < 3 || String(password).length < 6) {
+        if (String(password).length < 6) {
             return res
                 .status(400)
                 .json({ message: 'username en az 3, password en az 6 karakter olmalı.' });
         }
 
         const passwordHash = await hashPassword(password);
-        const user = await createUser(username, passwordHash);
+        const user = await createUser(safeUser, passwordHash);
 
         return res.status(201).json({
             message: 'Kayıt başarılı.',
@@ -59,7 +67,12 @@ export async function login(req, res) {
             return res.status(400).json({ message: 'username ve password zorunlu.' });
         }
 
-        const user = await findUserByUsername(username);
+        const safeUser = sanitizeUsernameForAuth(username);
+        if (!safeUser) {
+            return res.status(400).json({ message: 'Geçersiz kullanıcı adı veya şifre.' });
+        }
+
+        const user = await findUserByUsername(safeUser);
         if (!user) {
             return res.status(401).json({ message: 'Geçersiz kullanıcı adı veya şifre.' });
         }

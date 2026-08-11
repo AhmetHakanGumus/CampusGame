@@ -1,34 +1,43 @@
 'use strict';
 
 import { registerUser, loginUser, guestLogin } from './api.js';
+import { sanitizePlainText } from './security.js';
 
 export function setupAuthUI(onLoginSuccess) {
     const screen = document.getElementById('auth-screen');
     if (!screen) return;
 
-    const tabLogin = document.getElementById('auth-tab-login');
-    const tabRegister = document.getElementById('auth-tab-register');
+    const panelLogin = document.getElementById('auth-panel-login');
+    const panelRegister = document.getElementById('auth-panel-register');
+    const heading = document.getElementById('auth-heading');
+    const sub = document.getElementById('auth-sub');
     const loginForm = document.getElementById('auth-login-form');
     const registerForm = document.getElementById('auth-register-form');
     const msg = document.getElementById('auth-msg');
+    const showRegister = document.getElementById('auth-show-register');
+    const showLogin = document.getElementById('auth-show-login');
 
-    const switchTab = (mode) => {
+    const setMessage = (text, ok = false) => {
+        msg.textContent = sanitizePlainText(text, 800);
+        msg.className = `auth-msg ${ok ? 'ok' : 'err'}`;
+    };
+
+    const switchMode = (mode) => {
         const isLogin = mode === 'login';
-        tabLogin.classList.toggle('active', isLogin);
-        tabRegister.classList.toggle('active', !isLogin);
-        loginForm.style.display = isLogin ? 'block' : 'none';
-        registerForm.style.display = isLogin ? 'none' : 'block';
+        if (panelLogin) panelLogin.hidden = !isLogin;
+        if (panelRegister) panelRegister.hidden = isLogin;
+        if (heading) heading.textContent = isLogin ? 'Harran Kampüs' : 'Hesap oluştur';
+        if (sub) {
+            sub.textContent = isLogin
+                ? 'Hesabınla giriş yap veya misafir ol'
+                : 'Kullanıcı adı ve şifre ile kayıt ol';
+        }
         msg.textContent = '';
         msg.className = 'auth-msg';
     };
 
-    const setMessage = (text, ok = false) => {
-        msg.textContent = text;
-        msg.className = `auth-msg ${ok ? 'ok' : 'err'}`;
-    };
-
-    tabLogin.addEventListener('click', () => switchTab('login'));
-    tabRegister.addEventListener('click', () => switchTab('register'));
+    showRegister?.addEventListener('click', () => switchMode('register'));
+    showLogin?.addEventListener('click', () => switchMode('login'));
 
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -51,7 +60,7 @@ export function setupAuthUI(onLoginSuccess) {
             setMessage('Misafir oturumu açılıyor...', true);
             try {
                 const res = await guestLogin();
-                const u = res?.username || 'Misafir';
+                const u = sanitizePlainText(res?.username || 'Misafir', 128);
                 setMessage(`Hoş geldin, ${u}. Yükleniyor...`, true);
                 screen.style.display = 'none';
                 await onLoginSuccess(u, res?.sessionToken || '');
@@ -69,13 +78,12 @@ export function setupAuthUI(onLoginSuccess) {
         try {
             await registerUser(username, password);
             setMessage('Kayıt başarılı. Şimdi giriş yapabilirsin.', true);
-            switchTab('login');
+            switchMode('login');
             document.getElementById('auth-login-username').value = username;
         } catch (err) {
             setMessage(err.message || 'Kayıt başarısız.');
         }
     });
 
-    switchTab('login');
+    switchMode('login');
 }
-

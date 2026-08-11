@@ -3,11 +3,13 @@ import {
     appendMoveAndUpdateState,
     clearQueueSocketBySocketId,
     createMatch,
+    DEFAULT_GAME_MESA_ID,
     finishMatch,
     getActiveMatchForUser,
+    getFirstActiveMatch,
+    getActiveMatches,
     getFirstWaitingQueueEntry,
     getMatchById,
-    getMoveCount,
     getQueueCount,
     isUserQueued,
     removeQueueEntryBySocketId,
@@ -15,7 +17,7 @@ import {
     touchQueueEntry,
     upsertQueueEntry
 } from './models/chess.model.js';
-import { pool } from './db.js';
+import { recordChessWinLossAndMeta, recordChessDrawAndMeta } from './chessLeaderboard.util.js';
 
 function roomName(matchId) {
     return `chess-match-${matchId}`;
@@ -31,6 +33,20 @@ function randomColors(userA, userB) {
 export function createChessService({ io, resolvePlayerBySocketId, resolveSocketIdByUserId }) {
     const engineByMatchId = new Map();
 
+    /** Oda yayını + beyaz/siyah socket'ine doğrudan (bazı VR istemcilerde oda üyeliği kaçabiliyor). */
+    function emitChessMatchEnded(match, payload) {
+        const id = Number(match.id);
+        io.to(roomName(id)).emit('chess:match:ended', payload);
+        const seen = new Set();
+        for (const uid of [match.white_user_id, match.black_user_id]) {
+            const sid = resolveSocketIdByUserId(Number(uid));
+            if (!sid || seen.has(sid)) continue;
+            seen.add(sid);
+            const sock = io.sockets.sockets.get(sid);
+            if (sock) sock.emit('chess:match:ended', payload);
+        }
+    }
+
     const ensureEngine = async (match) => {
         const id = Number(match.id);
         if (engineByMatchId.has(id)) return engineByMatchId.get(id);
@@ -45,6 +61,7 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
         const turnColor = engine.turn() === 'w' ? 'white' : 'black';
         const payload = {
             matchId: Number(match.id),
+            mesaId: match.mesa_id != null ? Number(match.mesa_id) : DEFAULT_GAME_MESA_ID,
             fen: engine.fen(),
             turn: engine.turn(),
             turnColor,
@@ -81,10 +98,33 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
     };
 
     async function emitQueueState(userId, socket) {
-        const waiting = await getFirstWaitingQueueEntry(userId);
-        const totalWaiting = await getQueueCount();
-        const selfQueued = await isUserQueued(userId);
+        // İstemci hangi masayı soruyorsa onun kuyruğunu gösterir; göndermezse varsayılan 1.
+        // Not: broadcastQueueStates tüm masaları ayrı ayrı yayınladığı için bu alan çoğu zaman dolu gelir.
+        const mesaId = socket?.data?.mesaId != null ? Number(socket.data.mesaId) : DEFAULT_GAME_MESA_ID;
+        const waiting = await getFirstWaitingQueueEntry(userId, mesaId);
+        const totalWaiting = await getQueueCount(mesaId);
+        const selfQueued = await isUserQueued(userId, mesaId);
+        const live = await getFirstActiveMatch(mesaId);
+        // PC/mobil sanal masa (0): aynı anda birden fazla aktif maç olabilir.
+        const liveList = mesaId === 0 ? await getActiveMatches(mesaId, 50) : null;
+        let activeMatch = null;
+        if (live) {
+            activeMatch = {
+                matchId: Number(live.id),
+                whiteUserId: Number(live.white_user_id),
+                blackUserId: Number(live.black_user_id)
+            };
+        }
+        const activeMatches =
+            Array.isArray(liveList) && liveList.length
+                ? liveList.map((m) => ({
+                      matchId: Number(m.id),
+                      whiteUserId: Number(m.white_user_id),
+                      blackUserId: Number(m.black_user_id)
+                  }))
+                : null;
         const payload = {
+            mesaId,
             selfQueued,
             waitingPlayer: waiting
                 ? {
@@ -93,7 +133,9 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
                       joinedAt: waiting.joined_at
                   }
                 : null,
-            totalWaiting
+            totalWaiting,
+            activeMatch,
+            activeMatches
         };
         socket.emit('chess:queue:state', payload);
     }
@@ -103,7 +145,11 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
         for (const socket of all.values()) {
             const player = resolvePlayerBySocketId(socket.id);
             if (!player?.userId) continue;
-            await emitQueueState(player.userId, socket);
+            // 3 masa: 0 (PC/mobil sanal), 1-2 (VR masaları). Her mesa ayrı kuyruk/state.
+            for (const mesaId of [0, 1, 2]) {
+                socket.data.mesaId = mesaId;
+                await emitQueueState(player.userId, socket);
+            }
         }
     }
 
@@ -116,6 +162,11 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
         if (blackSocketId) sockets.push(io.sockets.sockets.get(blackSocketId));
         const engine = await ensureEngine(match);
         const payload = buildStatePayload({ match, engine, playersByUserId });
+        // Sadece gerçek kampüs masaları (1-2) world güncellemesi yayınlar.
+        // Web/mobil "sanal masa" (0) kampüsteki masaları doldurmasın.
+        if (payload.mesaId === 1 || payload.mesaId === 2) {
+            io.emit('chess:state:world', payload);
+        }
         sockets.forEach((s) => {
             if (!s) return;
             s.join(room);
@@ -142,14 +193,18 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
         await touchQueueEntry(player.userId, socket.id);
     }
 
-    async function onPlayerDisconnected(socketId) {
+    /**
+     * @param {string} socketId
+     * @param {{ userId?: number, username?: string } | null} disconnectedPlayer — app.js disconnect'te players silinmeden önce verilir; aksi halde resolvePlayer her zaman null kalırdı.
+     */
+    async function onPlayerDisconnected(socketId, disconnectedPlayer = null) {
         // Oyuncu sekmeyi kapatırsa / bağlantı koparsa kuyruktan da çıksın.
         // (Aksi halde status=waiting kalıp "hayalet" sıra oluşturabiliyor.)
         await removeQueueEntryBySocketId(socketId);
         await clearQueueSocketBySocketId(socketId);
 
         // Aktif maç varsa "exit" olarak bitir ve rakibe yayınla.
-        const player = resolvePlayerBySocketId(socketId);
+        const player = disconnectedPlayer || resolvePlayerBySocketId(socketId);
         if (!player?.userId) return;
         const active = await getActiveMatchForUser(Number(player.userId));
         if (!active || active.status !== 'active') return;
@@ -162,58 +217,87 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
         const winnerSocketId = resolveSocketIdByUserId(Number(winnerUserId));
         const winnerPlayer = winnerSocketId ? resolvePlayerBySocketId(winnerSocketId) : null;
 
+        const fenForLb = active.fen || new Chess().fen();
+
         const finished = await finishMatch({
             matchId: Number(active.id),
             winnerUserId,
-            exitReason: 'exit'
+            exitReason: 'disconnect'
         });
 
-        if (winnerPlayer?.nickname || winnerPlayer?.username) {
-            await pool.query(
-                `INSERT INTO campus_scores (game, player_name, score) VALUES ($1, $2, $3)`,
-                ['satranc', String(winnerPlayer.nickname || winnerPlayer.username).slice(0, 64), 50]
-            );
-        }
+        const leaderboard = await recordChessWinLossAndMeta(
+            winnerPlayer?.nickname || winnerPlayer?.username || `Oyuncu${winnerUserId}`,
+            player?.nickname || player?.username || `Oyuncu${player.userId}`,
+            winnerUserId,
+            Number(player.userId),
+            {
+                fen: fenForLb,
+                whiteUserId: active.white_user_id,
+                blackUserId: active.black_user_id
+            }
+        );
 
         engineByMatchId.delete(Number(active.id));
-        io.to(roomName(active.id)).emit('chess:match:ended', {
+        emitChessMatchEnded(active, {
             matchId: Number(active.id),
             winnerUserId: finished?.winner_user_id || winnerUserId,
             winnerUsername: winnerPlayer?.username || `user-${winnerUserId}`,
-            reason: 'exit',
-            message: `${player?.username || 'Oyuncu'} bağlantıyı kapattı. ${winnerPlayer?.username || 'Rakip'} kazandı.`
+            loserUserId: Number(player.userId),
+            loserUsername: player?.username || `user-${player.userId}`,
+            reason: 'disconnect',
+            message: `${player?.username || 'Oyuncu'} bağlantıyı kapattı. ${winnerPlayer?.username || 'Rakip'} kazandı.`,
+            leaderboard
         });
 
         await broadcastQueueStates();
     }
 
     function bindSocket(socket, playersByUserId) {
-        socket.on('chess:queue:join', async () => {
+        socket.on('chess:queue:join', async ({ mesaId } = {}) => {
             const player = resolvePlayerBySocketId(socket.id);
             if (!player?.userId) return;
+            const mid = mesaId != null ? Number(mesaId) : DEFAULT_GAME_MESA_ID;
             const active = await getActiveMatchForUser(player.userId);
             if (active) {
                 socket.emit('chess:error', { message: 'Aktif maçın varken kuyruğa giremezsin.' });
                 return;
             }
-            const alreadyQueued = await isUserQueued(player.userId);
+            const alreadyQueued = await isUserQueued(player.userId, mid);
             if (alreadyQueued) {
                 await broadcastQueueStates();
                 return;
             }
-            const waiting = await getFirstWaitingQueueEntry(player.userId);
+            // VR (1-2) ve PC/mobil (0) kuyrukları ayrı ama çapraz eşleşebilsin:
+            // - VR sıraya girerse: önce kendi masası, sonra PC/mobil (0)
+            // - PC/mobil sıraya girerse: önce PC/mobil (0), sonra VR masaları (1-2)
+            const candidateMesaIds =
+                mid === 0 ? [0, 1, 2] : [mid, 0];
+            let waiting = null;
+            let waitingMid = mid;
+            for (const cmid of candidateMesaIds) {
+                const w = await getFirstWaitingQueueEntry(player.userId, cmid);
+                if (w) {
+                    waiting = w;
+                    waitingMid = cmid;
+                    break;
+                }
+            }
             if (waiting) {
                 const otherActive = await getActiveMatchForUser(Number(waiting.user_id));
                 if (otherActive) {
-                    await removeQueueEntry(waiting.user_id);
+                    await removeQueueEntry(waiting.user_id, waitingMid);
                 } else {
+                    // Karma eşleşmede maç VR masasının üzerinde oluşsun ki VR masada oynasın.
+                    // (PC/mobil oyuncu overlay'de oynar ama avatarı masaya ışınlanabilir.)
+                    const matchMesaId = mid === 0 ? waitingMid : mid;
                     const colors = randomColors(player.userId, Number(waiting.user_id));
                     const initial = new Chess();
                     const match = await createMatch({
                         whiteUserId: colors.whiteUserId,
                         blackUserId: colors.blackUserId,
                         fen: initial.fen(),
-                        turn: initial.turn()
+                        turn: initial.turn(),
+                        mesaId: matchMesaId
                     });
                     engineByMatchId.set(Number(match.id), initial);
                     await emitMatchStart(match, playersByUserId);
@@ -221,41 +305,81 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
                     return;
                 }
             }
-            const currentCount = await getQueueCount();
-            if (currentCount >= 2) {
+            const currentCount = await getQueueCount(mid);
+            // VR masaları (1-2) fiziksel kapasite: 2 kişi.
+            // PC/mobil sanal masa (0) aynı anda çoklu maç üretebilir; kuyruk limiti koymuyoruz.
+            if (mid !== 0 && currentCount >= 2) {
                 socket.emit('chess:error', { message: 'Kuyruk dolu (maks 2). Biraz sonra tekrar dene.' });
                 return;
             }
             await upsertQueueEntry({
                 userId: player.userId,
                 username: player.username,
-                socketId: socket.id
+                socketId: socket.id,
+                mesaId: mid
             });
             await broadcastQueueStates();
-        });
-
-        socket.on('chess:queue:leave', async () => {
-            const player = resolvePlayerBySocketId(socket.id);
-            if (!player?.userId) return;
-            await removeQueueEntry(player.userId);
-            await broadcastQueueStates();
-        });
-
-        socket.on('chess:queue:list', async () => {
-            const player = resolvePlayerBySocketId(socket.id);
-            if (!player?.userId) return;
+            // Sanal masa (0) gibi yayınlanmayan masalarda da bu socket'e anlık state ver.
+            socket.data.mesaId = mid;
             await emitQueueState(player.userId, socket);
         });
 
-        socket.on('chess:match:start', async () => {
+        socket.on('chess:queue:leave', async ({ mesaId } = {}) => {
             const player = resolvePlayerBySocketId(socket.id);
             if (!player?.userId) return;
+            const mid = mesaId != null ? Number(mesaId) : DEFAULT_GAME_MESA_ID;
+            await removeQueueEntry(player.userId, mid);
+            await broadcastQueueStates();
+            socket.data.mesaId = mid;
+            await emitQueueState(player.userId, socket);
+        });
+
+        socket.on('chess:queue:list', async ({ mesaId } = {}) => {
+            const player = resolvePlayerBySocketId(socket.id);
+            if (!player?.userId) return;
+            socket.data.mesaId = mesaId != null ? Number(mesaId) : DEFAULT_GAME_MESA_ID;
+            await emitQueueState(player.userId, socket);
+        });
+
+        /** Oyuncu olmayan istemciler maç odasına katılır; chess:state:update yayınını alır (izleyici). */
+        socket.on('chess:watch', async ({ matchId } = {}) => {
+            const player = resolvePlayerBySocketId(socket.id);
+            if (!player?.userId || matchId == null) return;
+            const match = await getMatchById(Number(matchId));
+            if (!match || match.status !== 'active') {
+                socket.emit('chess:error', { message: 'Maç yok veya bitti.' });
+                return;
+            }
+            const uid = Number(player.userId);
+            if (uid === Number(match.white_user_id) || uid === Number(match.black_user_id)) {
+                socket.emit('chess:error', { message: 'Zaten bu maçın oyuncususun.' });
+                return;
+            }
+            socket.join(roomName(match.id));
+            const engine = await ensureEngine(match);
+            const payload = buildStatePayload({ match, engine, playersByUserId });
+            socket.emit('chess:watch:ack', {
+                ...payload,
+                yourColor: 'spectator',
+                role: 'spectator'
+            });
+        });
+
+        socket.on('chess:watch:leave', ({ matchId } = {}) => {
+            if (matchId == null) return;
+            socket.leave(roomName(Number(matchId)));
+        });
+
+        socket.on('chess:match:start', async ({ mesaId } = {}) => {
+            const player = resolvePlayerBySocketId(socket.id);
+            if (!player?.userId) return;
+            const mid = mesaId != null ? Number(mesaId) : DEFAULT_GAME_MESA_ID;
             const active = await getActiveMatchForUser(player.userId);
             if (active) {
                 socket.emit('chess:error', { message: 'Zaten aktif maçın var.' });
                 return;
             }
-            const waiting = await getFirstWaitingQueueEntry(player.userId);
+            const waiting = await getFirstWaitingQueueEntry(player.userId, mid);
             if (!waiting) {
                 socket.emit('chess:error', { message: 'Bekleyen oyuncu bulunamadı.' });
                 await broadcastQueueStates();
@@ -263,19 +387,20 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
             }
             const otherActive = await getActiveMatchForUser(Number(waiting.user_id));
             if (otherActive) {
-                await removeQueueEntry(waiting.user_id);
+                await removeQueueEntry(waiting.user_id, mid);
                 socket.emit('chess:error', { message: 'Bekleyen oyuncu artık müsait değil.' });
                 await broadcastQueueStates();
                 return;
             }
-            await removeQueueEntry(player.userId);
+            await removeQueueEntry(player.userId, mid);
             const colors = randomColors(player.userId, Number(waiting.user_id));
             const initial = new Chess();
             const match = await createMatch({
                 whiteUserId: colors.whiteUserId,
                 blackUserId: colors.blackUserId,
                 fen: initial.fen(),
-                turn: initial.turn()
+                turn: initial.turn(),
+                mesaId: mid
             });
             engineByMatchId.set(Number(match.id), initial);
             await emitMatchStart(match, playersByUserId);
@@ -292,6 +417,10 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
                 match = await getActiveMatchForUser(player.userId);
             }
             if (!match) {
+                socket.emit('chess:error', { message: 'Aktif maç bulunamadı.' });
+                return;
+            }
+            if (match.status !== 'active' || !match.fen) {
                 socket.emit('chess:error', { message: 'Aktif maç bulunamadı.' });
                 return;
             }
@@ -335,19 +464,17 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
                 promotion: promotion || 'q'
             });
             if (!move) {
-                socket.emit('chess:error', { message: 'Geçersiz hamle.' });
+                const syncPayload = buildStatePayload({ match, engine, playersByUserId });
+                io.to(roomName(match.id)).emit('chess:state:update', syncPayload);
+                if (syncPayload.mesaId === 1 || syncPayload.mesaId === 2) {
+                    io.emit('chess:state:world', syncPayload);
+                }
                 return;
             }
-            const ply = (await getMoveCount(Number(matchId))) + 1;
             await appendMoveAndUpdateState({
                 matchId: Number(matchId),
-                ply,
-                from: move.from,
-                to: move.to,
-                promotion: move.promotion || null,
                 san: move.san,
                 fenAfter: engine.fen(),
-                movedByUserId: player.userId,
                 turnAfter: engine.turn()
             });
             const statePayload = buildStatePayload({
@@ -363,6 +490,9 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
                 playersByUserId
             });
             io.to(roomName(match.id)).emit('chess:state:update', statePayload);
+            if (statePayload.mesaId === 1 || statePayload.mesaId === 2) {
+                io.emit('chess:state:world', statePayload);
+            }
 
             if (statePayload.checkmate || statePayload.stalemate) {
                 const finished = await finishMatch({
@@ -370,23 +500,60 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
                     winnerUserId: statePayload.checkmate ? statePayload.winnerUserId : null,
                     exitReason: statePayload.checkmate ? 'checkmate' : 'stalemate'
                 });
+                let leaderboard = {};
                 if (statePayload.checkmate && statePayload.winnerUserId != null) {
                     const winnerPlayer = playersByUserId.get(Number(statePayload.winnerUserId));
                     const winnerName = winnerPlayer?.nickname || winnerPlayer?.username || statePayload.winnerUsername;
-                    await pool.query(
-                        `INSERT INTO campus_scores (game, player_name, score) VALUES ($1, $2, $3)`,
-                        ['satranc', String(winnerName || 'Oyuncu').slice(0, 64), 50]
+                    const loserUid =
+                        Number(statePayload.winnerUserId) === Number(match.white_user_id)
+                            ? Number(match.black_user_id)
+                            : Number(match.white_user_id);
+                    const loserPlayer = playersByUserId.get(loserUid);
+                    const loserName = loserPlayer?.nickname || loserPlayer?.username;
+                    leaderboard = await recordChessWinLossAndMeta(
+                        winnerName || 'Oyuncu',
+                        loserName || `Oyuncu${loserUid}`,
+                        Number(statePayload.winnerUserId),
+                        loserUid,
+                        {
+                            fen: engine.fen(),
+                            whiteUserId: match.white_user_id,
+                            blackUserId: match.black_user_id
+                        }
+                    );
+                } else if (statePayload.stalemate) {
+                    const wP = playersByUserId.get(Number(match.white_user_id));
+                    const bP = playersByUserId.get(Number(match.black_user_id));
+                    leaderboard = await recordChessDrawAndMeta(
+                        wP?.nickname || wP?.username || `user-${match.white_user_id}`,
+                        bP?.nickname || bP?.username || `user-${match.black_user_id}`,
+                        match.white_user_id,
+                        match.black_user_id,
+                        { fen: engine.fen() }
                     );
                 }
                 engineByMatchId.delete(Number(match.id));
-                io.to(roomName(match.id)).emit('chess:match:ended', {
+                const loserUidMat =
+                    statePayload.checkmate && statePayload.winnerUserId != null
+                        ? Number(statePayload.winnerUserId) === Number(match.white_user_id)
+                            ? Number(match.black_user_id)
+                            : Number(match.white_user_id)
+                        : null;
+                const loserPMat = loserUidMat != null ? playersByUserId.get(loserUidMat) : null;
+                emitChessMatchEnded(match, {
                     matchId: Number(match.id),
                     winnerUserId: finished?.winner_user_id || null,
                     winnerUsername: statePayload.winnerUsername || null,
+                    loserUserId: loserUidMat,
+                    loserUsername:
+                        loserPMat?.username ||
+                        loserPMat?.nickname ||
+                        (loserUidMat != null ? `user-${loserUidMat}` : null),
                     reason: finished?.exit_reason || (statePayload.checkmate ? 'checkmate' : 'stalemate'),
                     message: statePayload.checkmate
                         ? `${statePayload.winnerUsername} Kazandı - Şah Mat!`
-                        : 'Oyun berabere bitti.'
+                        : 'Oyun berabere bitti.',
+                    leaderboard
                 });
                 await broadcastQueueStates();
             }
@@ -405,26 +572,35 @@ export function createChessService({ io, resolvePlayerBySocketId, resolveSocketI
                 : Number(match.white_user_id);
             const winnerPlayer = playersByUserId.get(winnerUserId);
             const loserPlayer = playersByUserId.get(Number(player.userId));
+            const fenForLb = match.fen || new Chess().fen();
             const finished = await finishMatch({
                 matchId: Number(match.id),
                 winnerUserId,
                 exitReason: 'exit'
             });
-            if (winnerPlayer?.nickname || winnerPlayer?.username) {
-                await pool.query(
-                    `INSERT INTO campus_scores (game, player_name, score) VALUES ($1, $2, $3)`,
-                    ['satranc', String(winnerPlayer.nickname || winnerPlayer.username).slice(0, 64), 50]
-                );
-            }
+            const leaderboard = await recordChessWinLossAndMeta(
+                winnerPlayer?.nickname || winnerPlayer?.username || `Oyuncu${winnerUserId}`,
+                loserPlayer?.nickname || loserPlayer?.username || `Oyuncu${player.userId}`,
+                winnerUserId,
+                Number(player.userId),
+                {
+                    fen: fenForLb,
+                    whiteUserId: match.white_user_id,
+                    blackUserId: match.black_user_id
+                }
+            );
             engineByMatchId.delete(Number(match.id));
-            io.to(roomName(match.id)).emit('chess:match:ended', {
+            emitChessMatchEnded(match, {
                 matchId: Number(match.id),
                 winnerUserId: finished?.winner_user_id || winnerUserId,
                 winnerUsername: winnerPlayer?.username || `user-${winnerUserId}`,
+                loserUserId: Number(player.userId),
+                loserUsername: loserPlayer?.username || `user-${player.userId}`,
                 reason: 'exit',
                 message: `${loserPlayer?.username || 'Oyuncu'} oyundan ayrıldı. ${
                     winnerPlayer?.username || 'Rakip'
-                } kazandı.`
+                } kazandı.`,
+                leaderboard
             });
             await broadcastQueueStates();
         });

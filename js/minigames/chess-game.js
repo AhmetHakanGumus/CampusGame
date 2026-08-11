@@ -21,6 +21,8 @@ export class ChessGame {
         this.H = H;
         this.done = done;
         this.mode = opts.mode || 'local';
+        /** Çevrimiçi maçta izleyici: tahta güncellenir, hamle yok */
+        this.spectator = opts.spectator === true;
         this.localPlayerId = opts.localPlayerId || null;
         this.mp = opts.multiplayer || null;
         this.chess = new Chess();
@@ -37,6 +39,9 @@ export class ChessGame {
         this.lastServerMessage = '';
         this.gameOver = false;
         this.resultText = '';
+        this.statusBarH = 56;
+        /** @type {string[]} */
+        this._statusMsgLines = [];
         this.squareSize = Math.min(this.W, this.H) * 0.86 / 8;
         this.boardPx = this.squareSize * 8;
         this.offX = (this.W - this.boardPx) * 0.5;
@@ -73,7 +78,12 @@ export class ChessGame {
         if (!payload) return;
         this.matchId = payload.matchId ?? this.matchId;
         this.waitingOpponent = false;
-        this.side = payload.yourColor === 'black' ? 'b' : 'w';
+        const isSpec =
+            payload.yourColor === 'spectator' ||
+            payload.role === 'spectator' ||
+            this.spectator;
+        this.spectator = isSpec;
+        this.side = isSpec ? 'w' : payload.yourColor === 'black' ? 'b' : 'w';
         this.pendingMove = null;
         if (payload.fen) {
             try {
@@ -117,7 +127,7 @@ export class ChessGame {
         this.gameOver = true;
         this.resultText = payload?.message || 'Oyun bitti';
         this.lastServerMessage = '';
-        setTimeout(() => this.done(0), 1500);
+        /** Çevrimiçi PvP: maç sonu campus-app (finalizeChessMatchFromServer + endGame) — skor modalı yok. */
     }
 
     loop() {
@@ -125,19 +135,38 @@ export class ChessGame {
         this.draw();
     }
 
+    _pvpBlackView() {
+        return this.mode === 'pvp' && this.side === 'b';
+    }
+
     pointToSquare(x, y) {
-        const file = Math.floor((x - this.offX) / this.squareSize);
+        let file = Math.floor((x - this.offX) / this.squareSize);
         const rankFromTop = Math.floor((y - this.offY) / this.squareSize);
         if (file < 0 || file > 7 || rankFromTop < 0 || rankFromTop > 7) return null;
-        const rank = 8 - rankFromTop;
+        let rank;
+        if (this._pvpBlackView()) {
+            file = 7 - file;
+            rank = rankFromTop + 1;
+        } else {
+            rank = 8 - rankFromTop;
+        }
         return `${'abcdefgh'[file]}${rank}`;
     }
 
     squareToCenter(sq) {
         const file = 'abcdefgh'.indexOf(sq[0]);
         const rank = Number(sq[1]);
-        const x = this.offX + (file + 0.5) * this.squareSize;
-        const y = this.offY + (8 - rank + 0.5) * this.squareSize;
+        let f;
+        let rVisual;
+        if (this._pvpBlackView()) {
+            f = 7 - file;
+            rVisual = rank - 1;
+        } else {
+            f = file;
+            rVisual = 8 - rank;
+        }
+        const x = this.offX + (f + 0.5) * this.squareSize;
+        const y = this.offY + (rVisual + 0.5) * this.squareSize;
         return { x, y };
     }
 
@@ -146,6 +175,7 @@ export class ChessGame {
     }
 
     canInteract() {
+        if (this.spectator) return false;
         if (this.gameOver) return false;
         if (this.mode === 'local') return true;
         if (this.waitingOpponent) return false;
@@ -160,6 +190,7 @@ export class ChessGame {
         const piece = this.chess.get(square);
         if (!piece) return;
         if (piece.color !== this.chess.turn()) return;
+        if (this.mode === 'pvp' && piece.color !== this.side) return;
         this.selected = square;
         this.dragFrom = square;
         this.dragPiece = piece;
@@ -226,7 +257,7 @@ export class ChessGame {
                 } else {
                     const humanWon = winner === this.side;
                     score = humanWon ? 50 : 0;
-                    this.resultText = humanWon ? 'Mat! +50 puan' : 'Mat oldun';
+                    this.resultText = humanWon ? 'Mat! +1 turnuva puanı' : 'Mat oldun';
                 }
             } else {
                 this.resultText = 'Berabere';
@@ -234,6 +265,44 @@ export class ChessGame {
             setTimeout(() => this.done(score), 1400);
             return;
         }
+    }
+
+    _wrapUiLines(ctx, text, maxW) {
+        if (!text) return [];
+        const words = String(text).split(/\s+/).filter(Boolean);
+        const lines = [];
+        let line = '';
+        for (const w of words) {
+            const test = line ? `${line} ${w}` : w;
+            if (ctx.measureText(test).width > maxW && line) {
+                lines.push(line);
+                line = w;
+            } else {
+                line = test;
+            }
+        }
+        if (line) lines.push(line);
+        return lines;
+    }
+
+    _layoutBoard() {
+        const c = this.ctx;
+        const padX = 12;
+        const availW = Math.max(100, this.W - padX * 2);
+        const msgFontPx = Math.max(12, Math.min(14, this.H * 0.032));
+        c.font = `500 ${msgFontPx}px Inter,Arial,sans-serif`;
+        this._statusMsgLines =
+            this.lastServerMessage && !this.resultText
+                ? this._wrapUiLines(c, this.lastServerMessage, availW).slice(0, 3)
+                : [];
+        const nMsg = this._statusMsgLines.length;
+        const nRes = this.resultText ? 1 : 0;
+        this.statusBarH = Math.max(56, Math.min(140, 48 + nMsg * 18 + nRes * 20));
+        const boardAreaH = this.H - this.statusBarH;
+        this.squareSize = Math.min(this.W * 0.98, boardAreaH * 0.92) / 8;
+        this.boardPx = this.squareSize * 8;
+        this.offX = (this.W - this.boardPx) * 0.5;
+        this.offY = this.statusBarH + (boardAreaH - this.boardPx) * 0.5;
     }
 
     getPointerPos(e) {
@@ -264,7 +333,7 @@ export class ChessGame {
                 return;
             }
             const pc = this.chess.get(sq);
-            if (pc && pc.color === this.chess.turn()) {
+            if (pc && pc.color === this.chess.turn() && (this.mode !== 'pvp' || pc.color === this.side)) {
                 cancelDragState(this);
                 this.beginDrag(sq);
             }
@@ -294,14 +363,45 @@ export class ChessGame {
 
     draw() {
         const c = this.ctx;
+        this._layoutBoard();
         c.fillStyle = '#0f1724';
         c.fillRect(0, 0, this.W, this.H);
+
+        c.fillStyle = 'rgba(12,18,30,.97)';
+        c.fillRect(0, 0, this.W, this.statusBarH);
+        c.strokeStyle = 'rgba(80,130,210,.22)';
+        c.lineWidth = 1;
+        c.strokeRect(0.5, 0.5, this.W - 1, this.statusBarH - 1);
 
         for (let r = 0; r < 8; r++) {
             for (let f = 0; f < 8; f++) {
                 const light = (r + f) % 2 === 0;
                 c.fillStyle = light ? '#e8d9bd' : '#8b6b4a';
                 c.fillRect(this.offX + f * this.squareSize, this.offY + r * this.squareSize, this.squareSize, this.squareSize);
+            }
+        }
+
+        if (this.chess.inCheck() && !this.gameOver) {
+            const tc = this.chess.turn();
+            let ksq = null;
+            for (let rank = 1; rank <= 8 && !ksq; rank++) {
+                for (let fi = 0; fi < 8; fi++) {
+                    const sq = `${'abcdefgh'[fi]}${rank}`;
+                    const p = this.chess.get(sq);
+                    if (p && p.type === 'k' && p.color === tc) {
+                        ksq = sq;
+                        break;
+                    }
+                }
+            }
+            if (ksq) {
+                const p = this.squareToCenter(ksq);
+                const half = this.squareSize * 0.5;
+                c.fillStyle = 'rgba(239,68,68,.22)';
+                c.fillRect(p.x - half, p.y - half, this.squareSize, this.squareSize);
+                c.strokeStyle = 'rgba(239,68,68,.95)';
+                c.lineWidth = Math.max(3, this.squareSize * 0.08);
+                c.strokeRect(p.x - half, p.y - half, this.squareSize, this.squareSize);
             }
         }
 
@@ -361,12 +461,15 @@ export class ChessGame {
             }
         }
 
-        c.fillStyle = '#e8f0ff';
-        c.font = `${Math.max(14, this.H * 0.042)}px Inter,Arial`;
+        const turnFontPx = Math.max(14, Math.min(18, this.statusBarH * 0.28));
+        c.font = `600 ${turnFontPx}px Inter,Arial,sans-serif`;
         c.textAlign = 'left';
+        c.textBaseline = 'alphabetic';
         let turnLine = '';
         if (this.mode === 'local') {
             turnLine = this.chess.turn() === 'w' ? 'Sıra: Beyaz' : 'Sıra: Siyah';
+        } else if (this.spectator) {
+            turnLine = 'İzleyici — sadece izleme';
         } else if (this.waitingOpponent) {
             turnLine = 'Rakip bekleniyor...';
         } else if (this.pendingMove) {
@@ -374,14 +477,26 @@ export class ChessGame {
         } else {
             turnLine = `Sıra: ${this.chess.turn() === this.side ? 'Sen' : 'Rakip'}`;
         }
-        c.fillText(turnLine, 12, 24);
-        if (this.lastServerMessage && !this.resultText) {
+        if (this.chess.inCheck() && !this.gameOver) {
+            turnLine += ' · ŞAH!';
+        }
+        const padX = 12;
+        c.fillStyle = this.chess.inCheck() && !this.gameOver ? '#fb7185' : '#e8f0ff';
+        c.fillText(turnLine, padX, 22);
+        const msgFontPx = Math.max(12, Math.min(14, this.H * 0.032));
+        c.font = `500 ${msgFontPx}px Inter,Arial,sans-serif`;
+        let yMsg = 40;
+        if (this._statusMsgLines.length) {
             c.fillStyle = '#99d8ff';
-            c.fillText(this.lastServerMessage, 12, 50);
+            for (const ln of this._statusMsgLines) {
+                c.fillText(ln, padX, yMsg);
+                yMsg += 17;
+            }
         }
         if (this.resultText) {
+            c.font = `600 ${msgFontPx}px Inter,Arial,sans-serif`;
             c.fillStyle = '#ffd86a';
-            c.fillText(this.resultText, 12, this.lastServerMessage ? 74 : 50);
+            c.fillText(this.resultText, padX, yMsg);
         }
     }
 }

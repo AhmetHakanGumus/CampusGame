@@ -9,6 +9,21 @@
 
 ---
 
+##  İlk bakışta yönlendirme (Start Here)
+
+Projeyi yeni açtıysan önce şuraya bak:
+
+- `START_HERE.md` (hangi bilgi nerede?)
+
+Yeni ekleme dokümanları:
+
+- `docs/ADDING_BUILDING.md` (bina ekleme)
+- `docs/ADDING_GAME.md` (mini-game + spot ekleme)
+- `docs/ONLINE_QUEUEING.md` (VR + PC/mobil online kuyruk kuralları)
+- `docs/ADDING_ONLINE_GAME.md` (yeni online oyun şablonu)
+
+---
+
 ##  Oyun Hakkında
 
 Harran Üniversitesi Kampüs Sanal Turu, üniversitenin web sitesi için geliştirilmiş interaktif bir 3D deneyimdir. Oyuncular kampüs içinde serbestçe dolaşabilir ve tüm fakülte binalarını keşfedebilir. Harici kütüphane bağımlılığı olmadan yalnızca **vanilla JavaScript + Three.js** ile yazılmıştır.
@@ -95,8 +110,24 @@ npm run dev
 
 Tarayıcıda `http://localhost:5173` adresini aç.
 
+---
+
+##  Modüler içerik: yeni oyun/bina ekleme
+
+- **Yeni bina ekleme**: `docs/ADDING_BUILDING.md`
+- **Yeni oyun ekleme (mini-game + spot)**: `docs/ADDING_GAME.md`
+- **Online kuyruk sistemi (VR + PC/mobil)**: `docs/ONLINE_QUEUEING.md`
+- **Yeni online oyun ekleme şablonu (queue + match)**: `docs/ADDING_ONLINE_GAME.md`
+- **`campus-app.js` ve `js/campus/` modül yapısı**: `docs/CAMPUS_APP_MODULES.md`
+
+Kısa özet:
+- **Binalar**: `js/content/buildings.js` (re-export: `js/config.js`)
+- **Spotlar**: `js/content/spots.js` (re-export: `js/config.js`)
+- **Basit oyunlar**: `js/minigames/registry.js` + kayıtlar `js/minigames/default-mini-games.js`
+- **Kampüs modülleri / `campus-app` bölünmesi**: `js/campus/*` + `docs/CAMPUS_APP_MODULES.md`
+
 ### Ses Dosyası
-Ambiyans müziği için `Sound_Effects_Outdoor.mp3` dosyasını projenin `src/` klasörüne yerleştir. Dosya bulunamazsa oyun prosedürel ses efektleriyle çalışmaya devam eder.
+Ambiyans müziği için `Sound_Effects_Outdoor.mp3` dosyasını `public/Sounds/` altına yerleştir. Dosya bulunamazsa oyun prosedürel ses efektleriyle çalışmaya devam eder.
 
 ---
 

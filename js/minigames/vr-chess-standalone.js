@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { Chess } from 'chess.js/dist/esm/chess.js';
 import { playChessMove } from '../audio.js';
+import { createPieceModel, cloneMaterialsOnPieceGroup } from './chess-3d-pieces.js';
 
 const PIECE_SYMBOLS = {
     K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙',
@@ -244,80 +245,6 @@ class ChessEngine {
     }
 }
 
-function createPieceModel(type, color, whitePieceMat, blackPieceMat) {
-    const group = new THREE.Group();
-    const mat = color === 'white' ? whitePieceMat : blackPieceMat;
-
-    const baseGeo = new THREE.CylinderGeometry(0.35, 0.38, 0.1, 16);
-    const base = new THREE.Mesh(baseGeo, mat);
-    base.position.y = 0.05;
-    base.castShadow = true;
-    group.add(base);
-
-    switch (type) {
-        case 'P': {
-            const bodyGeo = new THREE.CylinderGeometry(0.15, 0.25, 0.4, 12);
-            const body = new THREE.Mesh(bodyGeo, mat); body.position.y = 0.3; body.castShadow = true; group.add(body);
-            const headGeo = new THREE.SphereGeometry(0.18, 12, 10);
-            const head = new THREE.Mesh(headGeo, mat); head.position.y = 0.6; head.castShadow = true; group.add(head);
-            break;
-        }
-        case 'R': {
-            const bodyGeo = new THREE.CylinderGeometry(0.22, 0.28, 0.55, 8);
-            const body = new THREE.Mesh(bodyGeo, mat); body.position.y = 0.38; body.castShadow = true; group.add(body);
-            const topGeo = new THREE.CylinderGeometry(0.28, 0.22, 0.15, 8);
-            const top = new THREE.Mesh(topGeo, mat); top.position.y = 0.73; top.castShadow = true; group.add(top);
-            for (let i = 0; i < 4; i++) {
-                const bGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
-                const b = new THREE.Mesh(bGeo, mat);
-                const angle = (i / 4) * Math.PI * 2;
-                b.position.set(Math.cos(angle) * 0.2, 0.87, Math.sin(angle) * 0.2);
-                b.castShadow = true; group.add(b);
-            }
-            break;
-        }
-        case 'N': {
-            const bodyGeo = new THREE.CylinderGeometry(0.18, 0.26, 0.45, 10);
-            const body = new THREE.Mesh(bodyGeo, mat); body.position.y = 0.33; body.castShadow = true; group.add(body);
-            const headGeo = new THREE.BoxGeometry(0.18, 0.35, 0.38);
-            const head = new THREE.Mesh(headGeo, mat); head.position.set(0, 0.7, 0.05); head.rotation.x = 0.3; head.castShadow = true; group.add(head);
-            const noseGeo = new THREE.BoxGeometry(0.14, 0.12, 0.2);
-            const nose = new THREE.Mesh(noseGeo, mat); nose.position.set(0, 0.58, 0.22); nose.castShadow = true; group.add(nose);
-            break;
-        }
-        case 'B': {
-            const bodyGeo = new THREE.CylinderGeometry(0.12, 0.25, 0.6, 12);
-            const body = new THREE.Mesh(bodyGeo, mat); body.position.y = 0.4; body.castShadow = true; group.add(body);
-            const headGeo = new THREE.SphereGeometry(0.16, 12, 10);
-            const head = new THREE.Mesh(headGeo, mat); head.position.y = 0.78; head.castShadow = true; group.add(head);
-            const tipGeo = new THREE.SphereGeometry(0.06, 8, 6);
-            const tip = new THREE.Mesh(tipGeo, mat); tip.position.y = 0.98; tip.castShadow = true; group.add(tip);
-            break;
-        }
-        case 'Q': {
-            const bodyGeo = new THREE.CylinderGeometry(0.1, 0.28, 0.7, 12);
-            const body = new THREE.Mesh(bodyGeo, mat); body.position.y = 0.45; body.castShadow = true; group.add(body);
-            const crownGeo = new THREE.SphereGeometry(0.2, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.6);
-            const crown = new THREE.Mesh(crownGeo, mat); crown.position.y = 0.85; crown.castShadow = true; group.add(crown);
-            const tipGeo = new THREE.SphereGeometry(0.08, 8, 6);
-            const tip = new THREE.Mesh(tipGeo, mat); tip.position.y = 1.05; tip.castShadow = true; group.add(tip);
-            break;
-        }
-        case 'K': {
-            const bodyGeo = new THREE.CylinderGeometry(0.12, 0.28, 0.75, 12);
-            const body = new THREE.Mesh(bodyGeo, mat); body.position.y = 0.48; body.castShadow = true; group.add(body);
-            const headGeo = new THREE.CylinderGeometry(0.18, 0.14, 0.2, 12);
-            const head = new THREE.Mesh(headGeo, mat); head.position.y = 0.92; head.castShadow = true; group.add(head);
-            const crossVGeo = new THREE.BoxGeometry(0.06, 0.22, 0.06);
-            const crossV = new THREE.Mesh(crossVGeo, mat); crossV.position.y = 1.13; crossV.castShadow = true; group.add(crossV);
-            const crossHGeo = new THREE.BoxGeometry(0.18, 0.06, 0.06);
-            const crossH = new THREE.Mesh(crossHGeo, mat); crossH.position.y = 1.18; crossH.castShadow = true; group.add(crossH);
-            break;
-        }
-    }
-    return group;
-}
-
 export class VrChessStandalone {
     /**
      * @param {object} opts
@@ -345,11 +272,15 @@ export class VrChessStandalone {
             enabled: false,
             matchId: null,
             myColor: null,
-            onMoveTry: null
+            onMoveTry: null,
+            /** @type {((p: object) => void) | null} */
+            onMatchOver: null
         };
         this.pendingMove = null;
         this._lastFenForSound = null;
         this.resultMessage = '';
+        /** @type {THREE.Object3D|null} */
+        this._hoverPieceGroup = null;
 
         // VR için satranç setini biraz daha yere yaklaştır (metre cinsinden).
         // Masa/tahta/taşlar birlikte offset alır; birbirinin üstünde düzgün durmaya devam eder.
@@ -377,11 +308,12 @@ export class VrChessStandalone {
 
     _y(v) { return v + this.yOffset; }
 
-    setOnlineContext({ enabled = false, matchId = null, myColor = null, onMoveTry = null } = {}) {
+    setOnlineContext({ enabled = false, matchId = null, myColor = null, onMoveTry = null, onMatchOver = null } = {}) {
         this.online.enabled = !!enabled;
         this.online.matchId = matchId;
         this.online.myColor = myColor;
         this.online.onMoveTry = onMoveTry;
+        this.online.onMatchOver = onMatchOver || null;
         this.pendingMove = null;
     }
 
@@ -443,10 +375,36 @@ export class VrChessStandalone {
 
     onServerStateUpdate(payload) {
         if (!payload) return;
+        // Maç bitti / sonuç paneli: gecikmeli state paketleri taşları yeniden çizmesin.
+        if (this.gameOver) return;
         if (payload.matchId != null && this.online.matchId != null && Number(payload.matchId) !== Number(this.online.matchId)) {
             return;
         }
+        // matchId önce payload ile senkron (aksi halde this.online.matchId null kalıp mat dalı hiç çalışmıyordu).
         this.setOnlineIdentity({ matchId: payload.matchId, yourColor: payload.yourColor });
+
+        // Mat/pat: son pozisyonu bir kare göster, sonra kampüs bitişi (panel + tahta kaldırma).
+        // online.enabled şartı kaldırıldı — bazı oturumlarda maç sonu hiç tetiklenmiyordu.
+        if (
+            typeof this.online.onMatchOver === 'function' &&
+            payload.matchId != null &&
+            this.online.matchId != null &&
+            Number(payload.matchId) === Number(this.online.matchId) &&
+            (payload.checkmate || payload.stalemate)
+        ) {
+            this.pendingMove = null;
+            if (payload.fen) {
+                const prevFen = this._lastFenForSound;
+                this._loadFenToEngine(payload.fen);
+                if (prevFen != null && payload.fen !== prevFen) {
+                    playChessMove();
+                }
+                this._lastFenForSound = payload.fen;
+            }
+            // finalizeChessMatchFromServer yalnızca campus-app onChessStateUpdate yedeği + chess:match:ended ile çağrılır
+            // (çift finalize / onlineChess.matchId yarışı VR'da sessiz kalıyordu).
+            return;
+        }
         this.pendingMove = null;
         this.resultMessage = payload.checkBy && payload.checkedPlayer
             ? `${payload.checkBy} ${payload.checkedPlayer} oyuncusuna şah çekti`
@@ -510,6 +468,7 @@ export class VrChessStandalone {
                 const p = this.chess.at(r, c);
                 if (p) {
                     const mesh = createPieceModel(p.type, p.color, this.whitePieceMat, this.blackPieceMat);
+                    cloneMaterialsOnPieceGroup(mesh);
                     mesh.position.set(c, this._y(0.1), r);
                     mesh.userData = { row: r, col: c, isPiece: true, pieceColor: p.color, pieceType: p.type };
                     this.boardGroup.add(mesh);
@@ -644,33 +603,180 @@ export class VrChessStandalone {
         }
         if (this.hud?.parentNode) this.hud.parentNode.removeChild(this.hud);
         this.hud = null;
-        this.root.removeFromParent();
         this.clearHighlights();
+        this._releaseGrabVisual();
+        this.root.removeFromParent();
+        this.root.traverse((o) => {
+            if (o.isMesh) {
+                o.geometry?.dispose?.();
+                const mats = Array.isArray(o.material) ? o.material : [o.material];
+                mats.forEach((m) => {
+                    if (m?.userData?._chessPieceMatOwned) m.dispose();
+                });
+            }
+        });
         this.grabbedPiece = null;
         this.grabbedFrom = null;
         this.selectedPiece = null;
         this.validMoves = [];
     }
 
+    destroy() {
+        this.dispose();
+    }
+
     _getClickables() {
         const objs = [];
         this.boardGroup.traverse((child) => {
-            if (child.isMesh && (child.userData.isSquare || child.userData.isPiece)) objs.push(child);
+            if (!child.isMesh) return;
+            if (child.userData.isSquare || child.userData.isPiece) {
+                objs.push(child);
+                return;
+            }
+            let p = child.parent;
+            while (p) {
+                if (p.userData?.isPiece) {
+                    objs.push(child);
+                    return;
+                }
+                p = p.parent;
+            }
         });
         return objs;
     }
 
     _hitFromController(controller) {
+        const inter = this._intersectController(controller);
+        return inter ? inter.object : null;
+    }
+
+    /**
+     * @returns {{ object: THREE.Object3D, distance: number } | null}
+     */
+    _intersectController(controller) {
+        if (!controller) return null;
         const tempMatrix = new THREE.Matrix4();
         tempMatrix.identity().extractRotation(controller.matrixWorld);
         const raycaster = new THREE.Raycaster();
         raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
         raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
         const intersects = raycaster.intersectObjects(this._getClickables(), true);
-        if (intersects.length === 0) return null;
-        let hit = intersects[0].object;
-        while (hit && !hit.userData.isSquare && !hit.userData.isPiece) hit = hit.parent;
-        return hit;
+        for (let i = 0; i < intersects.length; i++) {
+            let hit = intersects[i].object;
+            while (hit && !hit.userData.isSquare && !hit.userData.isPiece) hit = hit.parent;
+            if (hit) return { object: hit, distance: intersects[i].distance };
+        }
+        return null;
+    }
+
+    _forEachPieceMeshMaterial(group, fn) {
+        if (!group) return;
+        group.traverse((obj) => {
+            if (!obj.isMesh || !obj.material) return;
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            mats.forEach((mat) => {
+                if (mat && mat.isMeshStandardMaterial) fn(mat);
+            });
+        });
+    }
+
+    _resetPieceMaterials(group) {
+        this._forEachPieceMeshMaterial(group, (mat) => {
+            if (mat.emissive) mat.emissive.setHex(0x000000);
+            mat.emissiveIntensity = 0;
+        });
+    }
+
+    _clearAllPieceMaterialsEmissive() {
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const g = this.pieceMeshes[r][c];
+                if (g) this._resetPieceMaterials(g);
+            }
+        }
+    }
+
+    /** Şah çekilen tarafın şah taşı (hamle sırasındaki renk). */
+    _findCheckedKingGroup() {
+        if (this.gameOver || !this.chess.isKingInCheck(this.chess.turn)) return null;
+        const color = this.chess.turn;
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const p = this.chess.at(r, c);
+                if (p?.type === 'K' && p.color === color) return this.pieceMeshes[r][c];
+            }
+        }
+        return null;
+    }
+
+    /** VR lazer: en yakın taş grubu (kare değil). */
+    _pickHoverPieceGroup(ctrl0, ctrl1) {
+        let best = null;
+        let bestD = Infinity;
+        for (const ctrl of [ctrl0, ctrl1]) {
+            if (!ctrl) continue;
+            const inter = this._intersectController(ctrl);
+            if (!inter?.object?.userData?.isPiece) continue;
+            if (inter.distance >= bestD) continue;
+            bestD = inter.distance;
+            best = inter.object;
+        }
+        return best;
+    }
+
+    _isPieceGroupWhite(group) {
+        const c = group?.userData?.pieceColor;
+        return c === 'white' || c === 'w';
+    }
+
+    /**
+     * @param {number} [intensityMul] — açık taşlarda şah kırmızısı için >1
+     */
+    _applyPieceEmissivePulse(group, emissiveHex, baseInt, pulseAmp, t, phase, intensityMul = 1) {
+        const pulse = (baseInt + pulseAmp * (0.5 + 0.5 * Math.sin(t * phase))) * intensityMul;
+        this._forEachPieceMeshMaterial(group, (mat) => {
+            mat.emissive.setHex(emissiveHex);
+            mat.emissiveIntensity = pulse;
+        });
+    }
+
+    _applyCheckKingGlow(group, t) {
+        const white = this._isPieceGroupWhite(group);
+        // Beyaz şah: açık materyalde kırmızı için çok yüksek çarpan
+        this._applyPieceEmissivePulse(group, 0xff0000, 0.75, 0.62, t, 5.5, white ? 9.8 : 1.25);
+    }
+
+    _applyHoverGlow(group, t) {
+        this._applyPieceEmissivePulse(group, 0x00d0ff, 1.65, 0.72, t, 5.2, 1.85);
+    }
+
+    /** Sadece sıra VR oyuncusundayken lazer altı taş vurgusu (çevrimiçi). */
+    _allowVrHoverHighlight() {
+        if (this.gameOver) return false;
+        if (!this.online.enabled) return true;
+        if (this.pendingMove) return false;
+        return this.online.myColor != null && this.chess.turn === this.online.myColor;
+    }
+
+    /**
+     * @param {number} t
+     * @param {import('three').Object3D | null} ctrl0
+     * @param {import('three').Object3D | null} ctrl1
+     */
+    _updatePieceGlowVr(t, ctrl0, ctrl1) {
+        this._clearAllPieceMaterialsEmissive();
+        const kingG = this._findCheckedKingGroup();
+        if (kingG) {
+            this._applyCheckKingGlow(kingG, t);
+        }
+        const hoverG =
+            this._allowVrHoverHighlight() && (ctrl0 || ctrl1)
+                ? this._pickHoverPieceGroup(ctrl0, ctrl1)
+                : null;
+        this._hoverPieceGroup = hoverG;
+        if (hoverG && hoverG !== this.grabbedPiece && (!kingG || hoverG !== kingG)) {
+            this._applyHoverGlow(hoverG, t);
+        }
     }
 
     /**
@@ -801,13 +907,24 @@ export class VrChessStandalone {
         return this.onSelectEnd();
     }
 
-    update() {
+    /**
+     * @param {import('three').Object3D | null} [ctrl0]
+     * @param {import('three').Object3D | null} [ctrl1]
+     */
+    update(ctrl0, ctrl1) {
         const t = this.clock.getElapsedTime();
         this.highlightMeshes.forEach((m, i) => {
             if (m !== this.selectedSquareOverlay && m.geometry?.type === 'CylinderGeometry') {
                 m.position.y = this._y(0.11) + Math.sin(t * 3 + i * 0.5) * 0.02;
             }
         });
+        if (ctrl0 || ctrl1) {
+            this._updatePieceGlowVr(t, ctrl0 || null, ctrl1 || null);
+        } else {
+            this._clearAllPieceMaterialsEmissive();
+            const kingG = this._findCheckedKingGroup();
+            if (kingG) this._applyCheckKingGlow(kingG, t);
+        }
         if (this.grabbedPiece?.userData.grabbed) {
             const ctrl = this.grabbedPiece.userData.controller;
             if (ctrl) {

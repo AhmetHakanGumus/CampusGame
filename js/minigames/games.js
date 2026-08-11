@@ -208,10 +208,20 @@ class FlappyBird {
     }
     start() {
         this.bird = { x: this.W * .22, y: this.H / 2, vy: 0, r: 16 };
-        this.gravity = 0.42; this.flapPow = -8.5; this.pipes = [];
-        this.pipeW = 54; this.gap = this.H * .32; this.pipeTimer = 0; this.pipeInterval = 110;
+        // FPS bağımsız fizik: px/s ve s cinsinden.
+        // Eski değerler ~60fps varsayımıyla: gravity=0.42px/frame^2, flap=-8.5px/frame, pipeSpeed=3.5px/frame, pipeInterval=110frame.
+        this.gravity = 0.42 * 60 * 60; // px/s^2
+        this.flapVel = -8.5 * 60; // px/s
+        this.pipes = [];
+        this.pipeW = 54;
+        // Gap'i ekran boyutuna göre ayarla: küçük ekranlarda çok dar olmasın.
+        // (H*0.32 bazı çözünürlüklerde fazla zorlayıcı olabiliyor)
+        this.gap = Math.max(160, Math.min(260, this.H * 0.38));
+        this.pipeTimer = 0; // seconds
+        this.pipeInterval = 110 / 60; // seconds
+        this.pipeSpeed = 3.5 * 60; // px/s
         this.score = 0; this.alive = true; this.started = false;
-        this.frame = 0;
+        this._lastTs = 0;
         document.addEventListener('keydown', this._kb);
         this.canvas.addEventListener('touchstart', this._tc, { passive: false });
         this.canvas.addEventListener('click', this._cl);
@@ -225,27 +235,40 @@ class FlappyBird {
     flap() {
         if (!this.alive) { return; }
         if (!this.started) this.started = true;
-        this.bird.vy = this.flapPow;
+        this.bird.vy = this.flapVel;
         playBeep(700, .06, .3);
     }
     loop() {
-        G.gameRaf = requestAnimationFrame(() => this.loop());
+        G.gameRaf = requestAnimationFrame((t) => this.loop(t));
         this.update(); this.draw();
     }
     update() {
+        const now = performance.now();
+        if (!this._lastTs) this._lastTs = now;
+        let dt = (now - this._lastTs) / 1000;
+        this._lastTs = now;
+        // Tab switch / donma sonrası dev dt ile "atlama" olmasın.
+        dt = Math.max(0, Math.min(dt, 0.05));
+
         if (!this.started || !this.alive) return;
-        this.frame++;
-        this.bird.vy += this.gravity;
-        this.bird.y += this.bird.vy;
+        this.bird.vy += this.gravity * dt;
+        this.bird.y += this.bird.vy * dt;
         if (this.bird.y - this.bird.r < 0 || this.bird.y + this.bird.r > this.H) { this.die(); return; }
-        this.pipeTimer++;
+        this.pipeTimer += dt;
         if (this.pipeTimer >= this.pipeInterval) {
-            this.pipeTimer = 0;
-            const top = this.H * .15 + Math.random() * (this.H * .55);
+            this.pipeTimer -= this.pipeInterval;
+            // Gap'in bazen çok aşağıdan başlamasını engelle:
+            // bottom pipe yer/çime çok yaklaşınca "kaçınılmaz ölüm" hissi veriyor.
+            const groundMargin = 36; // yerde çizilen şerit + güvenlik payı
+            const edgePad = 36; // üst/alt kenar boşluğu
+            const minTop = edgePad;
+            const maxTop = Math.max(minTop, this.H - groundMargin - edgePad - this.gap);
+            const top = minTop + Math.random() * (maxTop - minTop);
             this.pipes.push({ x: this.W, top, scored: false });
         }
         for (let i = this.pipes.length - 1; i >= 0; i--) {
-            const p = this.pipes[i]; p.x -= 3.5;
+            const p = this.pipes[i];
+            p.x -= this.pipeSpeed * dt;
             if (!p.scored && p.x + this.pipeW < this.bird.x) { p.scored = true; this.score++; playBeep(880, .08); }
             if (p.x + this.pipeW < 0) { this.pipes.splice(i, 1); continue; }
             const bx = this.bird.x, by = this.bird.y, br = this.bird.r;
@@ -465,6 +488,7 @@ class Archery {
         this.canvas.addEventListener('touchend', this._tu, { passive: false });
         document.addEventListener('keydown', this._kb);
         document.addEventListener('keyup', this._kr);
+        this._lastTs = 0;
         this.loop();
     }
     destroy() {
@@ -503,18 +527,28 @@ class Archery {
         this.drawPct = 0;
         playArrowShoot();
     }
-    loop() { G.gameRaf = requestAnimationFrame(() => this.loop()); this.update(); this.draw(); }
-    update() {
+    loop(t) { G.gameRaf = requestAnimationFrame((t2) => this.loop(t2)); this.update(t); this.draw(); }
+    update(t) {
+        const now = t != null ? t : performance.now();
+        if (!this._lastTs) this._lastTs = now;
+        let dt = (now - this._lastTs) / 1000;
+        this._lastTs = now;
+        dt = Math.max(0, Math.min(dt, 0.05));
+
         const W = this.W;
         if (this.holding && this.state === 'aim') {
             this.drawPct = Math.min(1, (performance.now() - this.holdStart) / this.DRAW_TIME);
         }
-        this.tx += this.tdx;
+        // Target hızı: tdx eskiden px/frame idi, şimdi px/s gibi kullanıyoruz.
+        const tdxPerSec = this.tdx * 60;
+        this.tx += tdxPerSec * dt;
         if (this.tx - this.tr < W * .08) this.tdx = Math.abs(this.tdx);
         if (this.tx + this.tr > W * .92) this.tdx = -Math.abs(this.tdx);
 
         if (this.state === 'fly') {
-            this.flyT = Math.min(1, this.flyT + .07);
+            // flyT eskiden frame bazlıydı (~0.07/frame). dt ile saniye bazına çevir.
+            const flySpeed = 0.07 * 60; // per second
+            this.flyT = Math.min(1, this.flyT + flySpeed * dt);
             this.arrowFlyY = this.H * .82 + (this.ty - this.H * .82) * this.flyT;
             if (this.flyT >= 1) {
                 const hitDist = Math.abs(this.tx - this.W / 2);
@@ -644,6 +678,7 @@ class Basketball {
         this.canvas.addEventListener('click', this._cl);
         this.canvas.addEventListener('touchstart', this._tc, { passive: false });
         document.addEventListener('keydown', this._km);
+        this._lastTs = 0;
         this.loop();
     }
     destroy() {
@@ -656,24 +691,34 @@ class Basketball {
         if (this.state !== 'charge') return;
         const dx = this.hoopX - this.bx, dy = this.hoopY - this.by;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const baseSpd = dist * 0.022 * (0.6 + this.power / 100 * 0.65);
+        // baseSpd eskiden px/frame gibiydi; şimdi px/s.
+        const baseSpd = dist * 0.022 * (0.6 + this.power / 100 * 0.65) * 60;
         const ang = Math.atan2(dy, dx);
         this.bvx = baseSpd * Math.cos(ang) * 0.7;
         this.bvy = baseSpd * Math.sin(ang) - baseSpd * 0.9;
         this.state = 'fly'; this.trail = [];
         playBeep(300, .08, .5);
     }
-    loop() { G.gameRaf = requestAnimationFrame(() => this.loop()); this.frameN++; this.update(); this.draw(); }
-    update() {
+    loop(t) { G.gameRaf = requestAnimationFrame((t2) => this.loop(t2)); this.frameN++; this.update(t); this.draw(); }
+    update(t) {
+        const now = t != null ? t : performance.now();
+        if (!this._lastTs) this._lastTs = now;
+        let dt = (now - this._lastTs) / 1000;
+        this._lastTs = now;
+        dt = Math.max(0, Math.min(dt, 0.05));
+
         const W = this.W, H = this.H;
         if (this.state === 'charge') {
-            const spd = Math.min(3.5, 1.8 + this.attempts * 0.08);
-            this.power += this.powerDir * spd;
+            const spdFrame = Math.min(3.5, 1.8 + this.attempts * 0.08);
+            const spdPerSec = spdFrame * 60;
+            this.power += this.powerDir * spdPerSec * dt;
             if (this.power >= 100) { this.power = 100; this.powerDir = -1; }
             if (this.power <= 0) { this.power = 0; this.powerDir = 1; }
         } else if (this.state === 'fly') {
-            this.bvy += 0.38;
-            this.bx += this.bvx; this.by += this.bvy;
+            const g = 0.38 * 60 * 60; // px/s^2
+            this.bvy += g * dt;
+            this.bx += this.bvx * dt;
+            this.by += this.bvy * dt;
             this.trail.push({ x: this.bx, y: this.by });
             if (this.trail.length > 18) this.trail.shift();
             const dx = this.bx - this.hoopX, dy = this.by - this.hoopY;

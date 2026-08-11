@@ -7,15 +7,20 @@ import { Server as SocketIOServer } from 'socket.io';
 import authRoutes from './auth.routes.js';
 import { guest as authGuest } from './controllers/auth.controller.js';
 import leaderboardRoutes from './leaderboard.routes.js';
+import meRoutes from './me.routes.js';
 import { initDatabase } from './db.js';
-import { findUserByUsername } from './models/user.model.js';
+import { findUserByUsername, clearUserCrownChoice, updateUserCrownChoice } from './models/user.model.js';
 import { createChessService } from './chess.service.js';
+import { createDamaService } from './dama.service.js';
 import {
     getOnlineUsernames,
     getSessionByToken,
     markSessionOnline,
     markSocketOffline
 } from './session.store.js';
+import { sanitizeUsernameForAuth } from './inputValidation.js';
+import { getEligibleCrownBadges, resolveEquippedCrown } from './leaderboardBadges.util.js';
+import { registerCampusCrownRoomRefresh } from './campusCrownSync.registry.js';
 
 dotenv.config();
 
@@ -32,7 +37,7 @@ app.use(
     )
 );
 
-app.use(express.json());
+app.use(express.json({ limit: '48kb' }));
 app.use(cookieParser());
 
 app.get('/api/health', (_req, res) => {
@@ -44,6 +49,7 @@ app.post('/api/auth/guest', authGuest);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
+app.use('/api/me', meRoutes);
 
 const io = new SocketIOServer(httpServer, {
     cors: {
@@ -67,6 +73,12 @@ function resolveSocketIdByUserId(userId) {
 }
 
 const chessService = createChessService({
+    io,
+    resolvePlayerBySocketId,
+    resolveSocketIdByUserId
+});
+
+const damaService = createDamaService({
     io,
     resolvePlayerBySocketId,
     resolveSocketIdByUserId
@@ -103,6 +115,76 @@ function broadcastOnlineUsers() {
     });
 }
 
+const CROWN_REFRESH_MS = Number(process.env.CAMPUS_CROWN_REFRESH_MS || 20000);
+
+/**
+ * Liderlik değişince (başkası geçti, hak düştü vb.) bellekteki taçı DB + güncel haklarla hizalar;
+ * geçersiz crown_choice satırını siler ve gerekirse player-crown-updated yayınlar.
+ */
+async function refreshAllCampusPlayerCrowns() {
+    for (const cur of players.values()) {
+        if (!cur?.userId || !cur.username) continue;
+        let user;
+        try {
+            user = await findUserByUsername(cur.username);
+        } catch {
+            continue;
+        }
+        if (!user) continue;
+        let eligible = [];
+        try {
+            eligible = await getEligibleCrownBadges(Number(user.id), cur.nickname);
+        } catch {
+            continue;
+        }
+        let cg = user.crown_choice_game != null ? String(user.crown_choice_game).trim() : '';
+        let cp = user.crown_choice_place;
+        const cpNum = Number(cp);
+        const hadStoredChoice = Boolean(cg) && Number.isFinite(cpNum) && cpNum >= 1 && cpNum <= 3;
+        const choiceStillValid =
+            hadStoredChoice && eligible.some((b) => b.game === cg && b.place === cpNum);
+        if (hadStoredChoice && !choiceStillValid) {
+            try {
+                await clearUserCrownChoice(user.id);
+            } catch {
+                /* ignore */
+            }
+            cg = '';
+            cp = null;
+        }
+        const resolved = user.crown_choice_hidden
+            ? null
+            : resolveEquippedCrown(
+                  eligible,
+                  choiceStillValid ? cg : null,
+                  choiceStillValid ? cpNum : null
+              );
+        const nextG = resolved?.game ?? null;
+        const nextP = resolved?.place != null ? Number(resolved.place) : null;
+        const prevG = cur.crownGame != null ? String(cur.crownGame) : null;
+        const prevP = cur.crownPlace != null ? Number(cur.crownPlace) : null;
+        const pg = prevG || null;
+        const ng = nextG || null;
+        if (pg !== ng || prevP !== nextP) {
+            cur.crownGame = ng;
+            cur.crownPlace = nextP;
+            io.to(ROOM_ID).emit('player-crown-updated', {
+                id: cur.id,
+                crownGame: ng,
+                crownPlace: nextP
+            });
+        }
+    }
+}
+
+registerCampusCrownRoomRefresh(() => {
+    refreshAllCampusPlayerCrowns().catch(() => {});
+});
+
+setInterval(() => {
+    refreshAllCampusPlayerCrowns().catch(() => {});
+}, CROWN_REFRESH_MS);
+
 io.on('connection', (socket) => {
     socket.on('join-campus', async ({ nickname, username, sessionToken } = {}) => {
         try {
@@ -116,8 +198,9 @@ io.on('connection', (socket) => {
             }
 
             const session = getSessionByToken(sessionToken);
-            const cleanUsername = String(username || '').trim();
+            const cleanUsername = sanitizeUsernameForAuth(username);
             if (
+                !cleanUsername ||
                 !session ||
                 normalizeUsername(session.username) !== normalizeUsername(cleanUsername)
             ) {
@@ -155,10 +238,25 @@ io.on('connection', (socket) => {
                 return;
             }
             const spawn = getSpawnPoint(players.size);
+            const nick = sanitizeNick(nickname);
+            let crownGame = null;
+            let crownPlace = null;
+            try {
+                const eligible = await getEligibleCrownBadges(Number(user.id), nick);
+                const crown = user.crown_choice_hidden
+                    ? null
+                    : resolveEquippedCrown(eligible, user.crown_choice_game, user.crown_choice_place);
+                if (crown) {
+                    crownGame = crown.game;
+                    crownPlace = crown.place;
+                }
+            } catch (_e) {
+                /* ignore crown resolution */
+            }
             const player = {
                 id: socket.id,
                 userId: Number(user.id),
-                nickname: sanitizeNick(nickname),
+                nickname: nick,
                 username: cleanUsername,
                 x: spawn.x,
                 y: spawn.y,
@@ -167,7 +265,9 @@ io.on('connection', (socket) => {
                 jumping: false,
                 running: false,
                 bc: 0x1a4f8a,
-                face: 'neutral'
+                face: 'neutral',
+                crownGame,
+                crownPlace
             };
             players.set(socket.id, player);
             playersByUserId.set(Number(user.id), player);
@@ -176,8 +276,11 @@ io.on('connection', (socket) => {
             socket.to(ROOM_ID).emit('player-joined', player);
             broadcastOnlineUsers();
             await chessService.onPlayerConnected(socket);
+            await damaService.onPlayerConnected(socket);
             await chessService.broadcastQueueStates();
+            await damaService.broadcastQueueStates();
             await chessService.tryResumeForUser(socket, Number(user.id), playersByUserId);
+            await damaService.tryResumeForUser(socket, Number(user.id), playersByUserId);
         } catch (err) {
             console.error('join-campus error:', err);
             socket.emit('auth-error', { message: 'Bağlantı kurulurken hata oluştu.' });
@@ -196,7 +299,62 @@ io.on('connection', (socket) => {
         // Görünüm (isteğe bağlı)
         if (Number.isFinite(next.bc)) cur.bc = Number(next.bc);
         if (typeof next.face === 'string' && next.face) cur.face = String(next.face);
-        socket.to(ROOM_ID).emit('player-moved', { ...cur });
+        // Taç burada gönderilmez: her karede bellekteki eski tacı tekrar basmak sıra değişince
+        // "hayalet" altın taça yol açıyordu. Tacı yalnızca join + player-crown-updated taşır.
+        socket.to(ROOM_ID).emit('player-moved', {
+            id: cur.id,
+            nickname: cur.nickname,
+            x: cur.x,
+            y: cur.y,
+            z: cur.z,
+            yaw: cur.yaw,
+            jumping: cur.jumping,
+            running: cur.running,
+            bc: cur.bc,
+            face: cur.face
+        });
+    });
+
+    socket.on('crown-choice-update', async ({ sessionToken, game, place, nickname, clear } = {}) => {
+        const cur = players.get(socket.id);
+        if (!cur?.userId) return;
+        const session = getSessionByToken(String(sessionToken || ''));
+        if (!session || normalizeUsername(session.username) !== normalizeUsername(cur.username)) {
+            return;
+        }
+        try {
+            const user = await findUserByUsername(cur.username);
+            if (!user) return;
+            if (clear === true || game === '' || game == null) {
+                await clearUserCrownChoice(user.id);
+                cur.crownGame = null;
+                cur.crownPlace = null;
+                io.to(ROOM_ID).emit('player-crown-updated', {
+                    id: socket.id,
+                    crownGame: null,
+                    crownPlace: null
+                });
+                return;
+            }
+            const assertLeaderboardGameId = (await import('./inputValidation.js')).assertLeaderboardGameId;
+            const g = assertLeaderboardGameId(game);
+            const p = Number(place);
+            if (!Number.isFinite(p) || p < 1 || p > 3) return;
+            const nick = String(nickname || cur.nickname || user.username).trim().slice(0, 64);
+            const eligible = await getEligibleCrownBadges(user.id, nick);
+            const ok = eligible.some((b) => b.game === g && b.place === p);
+            if (!ok) return;
+            await updateUserCrownChoice(user.id, g, p);
+            cur.crownGame = g;
+            cur.crownPlace = p;
+            io.to(ROOM_ID).emit('player-crown-updated', {
+                id: socket.id,
+                crownGame: g,
+                crownPlace: p
+            });
+        } catch (_e) {
+            /* ignore */
+        }
     });
 
     socket.on('ball-state', (payload = {}) => {
@@ -207,20 +365,24 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         const player = players.get(socket.id);
         const hadPlayer = !!player;
+        // Satranç: onPlayerDisconnected içinde userId gerekli; players silinmeden snapshot gönder.
+        chessService.onPlayerDisconnected(socket.id, player || null).catch(() => {});
+        damaService.onPlayerDisconnected(socket.id, player || null).catch(() => {});
         if (hadPlayer) {
             players.delete(socket.id);
             if (player?.userId) playersByUserId.delete(Number(player.userId));
             socket.to(ROOM_ID).emit('player-left', { id: socket.id });
         }
         const offlineUsername = markSocketOffline(socket.id);
-        chessService.onPlayerDisconnected(socket.id).catch(() => {});
         if (hadPlayer || offlineUsername) {
             broadcastOnlineUsers();
         }
         chessService.broadcastQueueStates().catch(() => {});
+        damaService.broadcastQueueStates().catch(() => {});
     });
 
     chessService.bindSocket(socket, playersByUserId);
+    damaService.bindSocket(socket, playersByUserId);
 });
 
 initDatabase()

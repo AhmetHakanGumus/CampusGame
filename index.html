@@ -2,7 +2,8 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self'; upgrade-insecure-requests">
     <title>Harran Üniversitesi – Kampüs Turu</title>
     <link rel="stylesheet" href="/css/main.css">
 </head>
@@ -14,28 +15,47 @@
     <div id="auth-screen">
         <div class="auth-card">
             <div class="uni-crest">🏛️</div>
-            <h2>Harran Kampüs Giriş</h2>
-            <p class="auth-sub">Devam etmek için giriş yap</p>
-            <div class="auth-tabs">
-                <button id="auth-tab-login" class="active" type="button">Giriş Yap</button>
-                <button id="auth-tab-register" type="button">Kayıt Ol</button>
+            <h2 id="auth-heading">Harran Kampüs</h2>
+            <p class="auth-sub" id="auth-sub">Hesabınla giriş yap veya misafir ol</p>
+
+            <div id="auth-panel-login">
+                <form id="auth-login-form" class="auth-form">
+                    <input id="auth-login-username" type="text" placeholder="Kullanıcı adı" maxlength="64" required autocomplete="username">
+                    <input id="auth-login-password" type="password" placeholder="Şifre" minlength="6" required autocomplete="current-password">
+                    <button type="submit" class="auth-btn">Giriş Yap</button>
+                    <button type="button" id="auth-guest-btn" class="auth-guest-btn">Misafir olarak gir</button>
+                </form>
+                <p class="auth-footer-link">
+                    <button type="button" class="auth-text-btn" id="auth-show-register">Hesabın yok mu? Kayıt ol</button>
+                </p>
             </div>
 
-            <form id="auth-login-form" class="auth-form">
-                <input id="auth-login-username" type="text" placeholder="Kullanıcı adı" maxlength="64" required>
-                <input id="auth-login-password" type="password" placeholder="Şifre" minlength="6" required>
-                <button type="submit" class="auth-btn">Giriş Yap</button>
-                <button type="button" id="auth-guest-btn" class="auth-guest-btn">Misafir olarak gir</button>
-            </form>
-
-            <form id="auth-register-form" class="auth-form" style="display:none">
-                <input id="auth-register-username" type="text" placeholder="Kullanıcı adı" maxlength="64" required>
-                <input id="auth-register-password" type="password" placeholder="Şifre (min 6)" minlength="6" required>
-                <button type="submit" class="auth-btn">Kayıt Ol</button>
-            </form>
+            <div id="auth-panel-register" hidden>
+                <form id="auth-register-form" class="auth-form">
+                    <input id="auth-register-username" type="text" placeholder="Kullanıcı adı" maxlength="64" required autocomplete="username">
+                    <input id="auth-register-password" type="password" placeholder="Şifre (min 6)" minlength="6" required autocomplete="new-password">
+                    <button type="submit" class="auth-btn">Kayıt Ol</button>
+                </form>
+                <p class="auth-footer-link">
+                    <button type="button" class="auth-text-btn" id="auth-show-login">Zaten hesabın var mı? Giriş yap</button>
+                </p>
+            </div>
 
             <div id="auth-msg" class="auth-msg"></div>
-            <p class="auth-hand-hint">El önizleme (test): <code>?handPreview=1</code> — önizleme alanında sürükleyerek sağa sola döndürün.</p>
+        </div>
+    </div>
+
+    <!-- Giriş sonrası kampüs yüklemesi (auth kapanınca gösterilir) -->
+    <div id="campus-boot-overlay" class="campus-boot-overlay" aria-hidden="true" aria-busy="true" aria-live="polite">
+        <div class="campus-boot-bg" aria-hidden="true"></div>
+        <div class="campus-boot-card">
+            <div class="campus-boot-crest" aria-hidden="true">🏛️</div>
+            <h1 class="campus-boot-title">Harran Kampüs</h1>
+            <p class="campus-boot-sub">Sanal tur yükleniyor</p>
+            <div class="campus-boot-bar-wrap" aria-hidden="true">
+                <div class="campus-boot-bar"></div>
+            </div>
+            <p class="campus-boot-status" data-boot-status></p>
         </div>
     </div>
 
@@ -69,6 +89,7 @@
                 <button class="lb-tab" data-game="okculuk" title="Okçuluk">🏹</button>
                 <button class="lb-tab" data-game="basket" title="Basketbol">🏀</button>
                     <button class="lb-tab" data-game="satranc" title="Satranç">♟️</button>
+                <button class="lb-tab" data-game="dama" title="Dama">⛀</button>
             </div>
             <div id="lb-list"><div class="lb-empty">Yükleniyor…</div></div>
         </div>
@@ -87,6 +108,30 @@
 
     <!-- MINI-GAME OVERLAY -->
     <div id="game-overlay">
+        <div id="game-chess-3d-wrap" style="display:none;flex-direction:column;align-items:stretch;width:min(96vw,920px);max-height:min(88vh,720px);min-height:0;">
+            <div id="web-chess-3d-toolbar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;background:rgba(8,16,32,.88);border:1px solid rgba(120,180,255,.35);border-radius:12px;margin-bottom:10px;">
+                <span id="web-chess-3d-status" style="flex:1;min-width:160px;font-size:14px;line-height:1.35;color:#dce8ff;"></span>
+                <span style="display:flex;gap:4px;align-items:center;" title="Maç sırasında anında geçiş; tercih tarayıcıda saklanır">
+                    <button type="button" id="web-chess-view-2d" class="web-chess-3d-btn web-chess-view-mode-btn">2D</button>
+                    <button type="button" id="web-chess-view-3d" class="web-chess-3d-btn web-chess-view-mode-btn">3D</button>
+                </span>
+                <button type="button" id="web-chess-3d-camera-toggle" class="web-chess-3d-btn web-chess-3d-cam-only">Kamera (döndür)</button>
+                <button type="button" id="web-chess-3d-camera-reset" class="web-chess-3d-btn web-chess-3d-cam-only">Kamera sıfırla</button>
+            </div>
+            <div id="web-chess-3d-host" style="flex:1;min-height:min(58vh,480px);border-radius:12px;overflow:hidden;background:#050a14;border:1px solid rgba(100,160,255,.2);"></div>
+        </div>
+        <div id="game-dama-3d-wrap" style="display:none;flex-direction:column;align-items:stretch;width:min(96vw,920px);max-height:min(88vh,720px);min-height:0;">
+            <div id="web-dama-3d-toolbar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;background:rgba(8,16,32,.88);border:1px solid rgba(120,180,255,.35);border-radius:12px;margin-bottom:10px;">
+                <span id="web-dama-3d-status" style="flex:1;min-width:160px;font-size:14px;line-height:1.35;color:#dce8ff;"></span>
+                <span style="display:flex;gap:4px;align-items:center;" class="web-dama-view-mode-wrap" title="Maç sırasında anında geçiş; tercih tarayıcıda saklanır">
+                    <button type="button" id="web-dama-view-2d" class="web-chess-3d-btn web-chess-view-mode-btn">2D</button>
+                    <button type="button" id="web-dama-view-3d" class="web-chess-3d-btn web-chess-view-mode-btn">3D</button>
+                </span>
+                <button type="button" id="web-dama-3d-camera-toggle" class="web-chess-3d-btn web-chess-3d-cam-only">Kamera (sağ sürükle)</button>
+                <button type="button" id="web-dama-3d-camera-reset" class="web-chess-3d-btn web-chess-3d-cam-only">Kamera sıfırla</button>
+            </div>
+            <div id="web-dama-3d-host" style="flex:1;min-height:min(58vh,480px);border-radius:12px;overflow:hidden;background:#050a14;border:1px solid rgba(100,160,255,.2);"></div>
+        </div>
         <canvas id="game-canvas" width="600" height="400"></canvas>
         <div id="game-hud">
             <span id="game-score-txt">Skor: 0</span>
@@ -100,8 +145,9 @@
         <div class="sm-card">
             <h2 id="sm-game-name">Oyun Bitti!</h2>
             <div class="sm-final" id="sm-score-val">0</div>
-            <p>Puanını kaydetmek ister misin?</p>
-            <input id="sm-name" type="text" placeholder="Adını gir… (maks 20 harf)" maxlength="20">
+            <div class="sm-score-record" id="sm-score-record" style="display:none" aria-live="polite"></div>
+            <p id="sm-hint">Skorun kayıt için hazırlanıyor…</p>
+            <input id="sm-name" type="text" maxlength="64" autocomplete="username" style="display:none" aria-hidden="true">
             <div class="sm-btns">
                 <button id="sm-save">Kaydet 💾</button>
                 <button id="sm-skip">Atla</button>
@@ -111,12 +157,31 @@
         </div>
     </div>
 
+    <!-- Dama zorunlu yeme uyarısı: game-overlay dışında (VR kampüs tahtasında overlay kapalı olsa da görünsün) -->
+    <div id="web-dama-capture-rule-modal" style="display:none;position:fixed;inset:0;z-index:45000;align-items:center;justify-content:center;background:rgba(5,10,20,.74);backdrop-filter:blur(5px);">
+        <div role="dialog" aria-modal="true" aria-labelledby="web-dama-capture-rule-title" style="background:#152238;border-radius:14px;padding:22px 24px;max-width:380px;margin:16px;box-shadow:0 14px 44px rgba(0,0,0,.5);border:1px solid rgba(120,180,255,.38);">
+            <h2 id="web-dama-capture-rule-title" style="margin:0 0 10px;font-size:17px;color:#e8f2ff;">Yeme zorunludur</h2>
+            <p style="margin:0 0 18px;font-size:14px;line-height:1.5;color:#b8c8e8;">Rakip taşı yiyebiliyorsan başka hamle yapamazsın. Birden fazla yol varsa en çok taşı yiyen hamleyi seçmelisin.</p>
+            <button type="button" id="web-dama-capture-rule-ok" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid rgba(120,200,255,.45);background:rgba(80,140,220,.35);color:#f0f6ff;font-size:15px;font-weight:600;cursor:pointer;">Tamam</button>
+        </div>
+    </div>
+
     <!-- MOBİL BUTONLAR -->
     <div id="joy-base"><div id="joy-thumb"></div></div>
     <div id="joy-label">HAREKET</div>
     <button class="m-btn" id="m-bldg-btn" title="Binalar">🏢</button>
     <button class="m-btn" id="m-map-btn" title="Harita">🗺️</button>
     <button class="m-btn" id="m-lb-btn" title="Liderlik">🏆</button>
+    <button class="m-btn" id="m-esc-btn" type="button" title="Menü (ESC)">☰</button>
+
+    <!-- VR satranç maç sonu: 3D panel bazen görünmediği için zorunlu DOM katmanı -->
+    <div id="vr-chess-result-dom-overlay" aria-modal="true" role="dialog" style="display:none;position:fixed;inset:0;z-index:40000;align-items:center;justify-content:center;background:rgba(4,10,18,.88);backdrop-filter:blur(8px);flex-direction:column;padding:min(32px,6vw);box-sizing:border-box;">
+        <div style="max-width:min(96vw,920px);width:100%;background:rgba(12,22,36,.95);border:1px solid rgba(140,190,255,.45);border-radius:18px;padding:clamp(22px,4vw,36px);color:#e8f2ff;font:650 20px/1.55 system-ui,Segoe UI,sans-serif;box-shadow:0 14px 52px rgba(0,0,0,.55);">
+            <div id="vr-chess-result-dom-title" style="font-size:clamp(28px,5vw,38px);margin-bottom:16px;font-weight:800;letter-spacing:.01em;">Oyun bitti</div>
+            <div id="vr-chess-result-dom-sub" style="opacity:.94;font-weight:550;white-space:pre-wrap;margin-bottom:22px;font-size:clamp(18px,3.2vw,22px);line-height:1.38;max-height:min(58vh,520px);overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>
+            <button type="button" id="vr-chess-result-dom-ok" style="width:100%;padding:18px 22px;font-size:clamp(20px,3.4vw,24px);font-weight:800;border-radius:14px;border:1px solid rgba(100,200,130,.5);background:rgba(40,120,70,.38);color:#eaffef;cursor:pointer;">TAMAM</button>
+        </div>
+    </div>
 
     <script type="module" src="/js/main.js"></script>
 </body>
