@@ -2016,53 +2016,210 @@
         }
 
         .campus-boot-sub {
-            margin: 0 0 22px;
+            margin: 0 0 14px;
             font-size: 0.92rem;
             color: rgba(220, 232, 255, 0.55);
             font-weight: 400;
         }
 
-        .campus-boot-bar-wrap {
-            height: 5px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.08);
-            overflow: hidden;
-            margin: 0 auto 18px;
-            max-width: 280px;
-        }
-
-        .campus-boot-bar {
-            height: 100%;
-            width: 42%;
-            border-radius: inherit;
-            background: linear-gradient(90deg, #8b6914, #e8c870, #f5e6b8, #e8c870, #8b6914);
-            background-size: 200% 100%;
-            animation: campus-boot-shimmer 1.35s linear infinite;
-            box-shadow: 0 0 14px rgba(232, 200, 112, 0.45);
-        }
-
-        @keyframes campus-boot-shimmer {
-            0% { transform: translateX(-100%); background-position: 0% 0; }
-            100% { transform: translateX(240%); background-position: 100% 0; }
-        }
-
         .campus-boot-status {
             min-height: 1.25em;
-            margin: 0;
+            margin: 0 0 18px;
             font-size: 0.82rem;
             color: rgba(180, 210, 255, 0.72);
             letter-spacing: 0.02em;
         }
 
+        /* Connecting + world loader (Uiverse.io / Novaxlo) */
+        .campus-boot-connect {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            margin-top: 4px;
+        }
+
+        .campus-boot-connect .earth {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transform: scale(0.72);
+            transform-origin: center top;
+        }
+
+        .campus-boot-connect .earth p {
+            color: rgba(220, 232, 255, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding-top: 0.35em;
+            margin: 0;
+            font-size: 0.95em;
+            font-weight: 500;
+            letter-spacing: 0.12em;
+            text-transform: lowercase;
+            font-family: "Gill Sans", "Gill Sans MT", Calibri, "Trebuchet MS", sans-serif;
+        }
+
+        /* From Uiverse.io by Novaxlo */
+        .earth-loader {
+            --watercolor: #3344c1;
+            --landcolor: #7cc133;
+            width: 7.5em;
+            height: 7.5em;
+            background-color: var(--watercolor);
+            position: relative;
+            overflow: hidden;
+            border-radius: 50%;
+            box-shadow:
+                inset 0em 0.5em rgb(255, 255, 255, 0.25),
+                inset 0em -0.5em rgb(0, 0, 0, 0.25);
+            border: solid 0.15em white;
+            animation: earth-startround 1s;
+            animation-iteration-count: 1;
+        }
+
+        .earth-loader svg:nth-child(1) {
+            position: absolute;
+            bottom: -2em;
+            width: 7em;
+            height: auto;
+            animation: earth-round1 5s infinite linear 0.75s;
+        }
+
+        .earth-loader svg:nth-child(2) {
+            position: absolute;
+            top: -3em;
+            width: 7em;
+            height: auto;
+            animation: earth-round1 5s infinite linear;
+        }
+
+        .earth-loader svg:nth-child(3) {
+            position: absolute;
+            top: -2.5em;
+            width: 7em;
+            height: auto;
+            animation: earth-round2 5s infinite linear;
+        }
+
+        .earth-loader svg:nth-child(4) {
+            position: absolute;
+            bottom: -2.2em;
+            width: 7em;
+            height: auto;
+            animation: earth-round2 5s infinite linear 0.75s;
+        }
+
+        .campus-boot-percent {
+            margin: 0;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #e8c870;
+            letter-spacing: 0.06em;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 1px 10px rgba(232, 200, 112, 0.25);
+            min-height: 1.2em;
+        }
+
+        @keyframes earth-startround {
+            0% {
+                filter: brightness(500%);
+                box-shadow: none;
+            }
+            75% {
+                filter: brightness(500%);
+                box-shadow: none;
+            }
+            100% {
+                filter: brightness(100%);
+                box-shadow:
+                    inset 0em 0.5em rgb(255, 255, 255, 0.25),
+                    inset 0em -0.5em rgb(0, 0, 0, 0.25);
+            }
+        }
+
+        @keyframes earth-round1 {
+            0% {
+                left: -2em;
+                opacity: 100%;
+                transform: skewX(0deg) rotate(0deg);
+            }
+            30% {
+                left: -6em;
+                opacity: 100%;
+                transform: skewX(-25deg) rotate(25deg);
+            }
+            31% {
+                left: -6em;
+                opacity: 0%;
+                transform: skewX(-25deg) rotate(25deg);
+            }
+            35% {
+                left: 7em;
+                opacity: 0%;
+                transform: skewX(25deg) rotate(-25deg);
+            }
+            45% {
+                left: 7em;
+                opacity: 100%;
+                transform: skewX(25deg) rotate(-25deg);
+            }
+            100% {
+                left: -2em;
+                opacity: 100%;
+                transform: skewX(0deg) rotate(0deg);
+            }
+        }
+
+        @keyframes earth-round2 {
+            0% {
+                left: 5em;
+                opacity: 100%;
+                transform: skewX(0deg) rotate(0deg);
+            }
+            75% {
+                left: -7em;
+                opacity: 100%;
+                transform: skewX(-25deg) rotate(25deg);
+            }
+            76% {
+                left: -7em;
+                opacity: 0%;
+                transform: skewX(-25deg) rotate(25deg);
+            }
+            77% {
+                left: 8em;
+                opacity: 0%;
+                transform: skewX(25deg) rotate(-25deg);
+            }
+            80% {
+                left: 8em;
+                opacity: 100%;
+                transform: skewX(25deg) rotate(-25deg);
+            }
+            100% {
+                left: 5em;
+                opacity: 100%;
+                transform: skewX(0deg) rotate(0deg);
+            }
+        }
+
         @media (prefers-reduced-motion: reduce) {
             .campus-boot-bg,
             .campus-boot-crest,
-            .campus-boot-bar,
-            .campus-boot-card {
+            .campus-boot-card,
+            .earth-loader,
+            .earth-loader svg {
                 animation: none !important;
             }
             .campus-boot-card {
                 opacity: 1;
                 transform: none;
+            }
+            .earth-loader svg {
+                left: 0 !important;
+                opacity: 1 !important;
+                transform: none !important;
             }
         }

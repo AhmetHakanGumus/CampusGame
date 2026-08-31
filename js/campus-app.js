@@ -45,7 +45,8 @@ import { mesaIdForQueueJoin, mesaIdForQueueState } from './online/mesa.js';
 import {
     showCampusBootOverlay,
     hideCampusBootOverlay,
-    setCampusBootStatus
+    setCampusBootStatus,
+    setCampusBootPercent
 } from './campus/bootOverlay.js';
 import { initCampusContent } from './campus/initCampusContent.js';
 import { updateFollowCamera } from './campus/camera.js';
@@ -4275,6 +4276,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
             }
 
             setCampusBootStatus('Grafik motoru başlatılıyor…');
+            setCampusBootPercent(8);
 
             // ── Renderer ────────────────────────────────
             renderer = new THREE.WebGLRenderer({
@@ -4293,6 +4295,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
             renderer.setClearColor(0x7298b0);
             renderer.domElement.style.cssText = 'position:fixed;top:0;left:0;z-index:1;width:100%;height:100%';
             document.body.appendChild(renderer.domElement);
+            setCampusBootPercent(18);
 
             // ── Scene & Camera ──────────────────────────
             scene = new THREE.Scene();
@@ -4310,6 +4313,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
             ══════════════════════════════════════════════ */
             renderer.xr.enabled = true;
             detectAndSetupVR();
+            setCampusBootPercent(28);
 
             // ── Sahne ve oyun objeleri (UI/NPC/leaderboard API bir sonraki karede) ──
             setCampusBootStatus('Sahne oluşturuluyor…');
@@ -4318,13 +4322,25 @@ import { createSpawnStore } from './campus/spawnStore.js';
             // Bu bekleme, eski davranıştaki gibi dünyayı tek seferde "hazır" göstermeyi hedefler.
             if (bootModelPromises?.length) {
                 setCampusBootStatus('Kampüs modelleri yükleniyor…');
+                setCampusBootPercent(40);
+                const totalModels = bootModelPromises.length;
+                let settledModels = 0;
+                const tracked = bootModelPromises.map((p) =>
+                    Promise.resolve(p).finally(() => {
+                        settledModels += 1;
+                        const modelPct = 40 + Math.round((settledModels / totalModels) * 30);
+                        setCampusBootPercent(modelPct);
+                    })
+                );
                 await Promise.race([
-                    Promise.allSettled(bootModelPromises),
+                    Promise.allSettled(tracked),
                     new Promise((r) => setTimeout(r, 12000))
                 ]);
             }
+            setCampusBootPercent(72);
             setCampusBootStatus('Ana kapı yükleniyor…');
             universityGateRoot = await addUniversityMainGate({ scene, IS_MOB, buildingAABBs });
+            setCampusBootPercent(82);
             setCampusBootStatus('Kampüs ve bağlantı hazırlanıyor…');
             addInteractiveObjects();
             createPlayer();
@@ -4337,6 +4353,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
                 ensureWorldDamaBoard(mid);
             });
             setupControls();
+            setCampusBootPercent(90);
 
             const mc = document.getElementById('minimap');
             mc.width = mc.height = mmSize; mc.style.width = mc.style.height = mmSize + 'px';
@@ -4357,6 +4374,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
             });
 
             setCampusBootStatus('Son dokunuşlar…');
+            setCampusBootPercent(96);
             startNonVRLoop();
             document.body.classList.add('campus-ready');
 
@@ -10813,7 +10831,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
             firstWorldFrameDrawn = false;
             localNickname = String(username || 'Oyuncu').slice(0, 24);
             localSessionToken = String(sessionToken || '');
-            showCampusBootOverlay('Kampüs hazırlanıyor…');
+            showCampusBootOverlay('Kampüs hazırlanıyor…', 2);
             const waitForFirstWorldFrame = async ({ timeoutMs = 9000 } = {}) => {
                 const to = Math.max(0, Number(timeoutMs) || 0);
                 const start = performance.now();
@@ -10825,6 +10843,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
             try {
                 await initGame();
                 initAudio();
+                setCampusBootPercent(98);
                 // İlk karede bazı cihazlarda kamera henüz "player takip" konumuna oturmadan
                 // render görülebiliyor (boşlukta/havadaymış gibi). Burada kamerayı senkronla
                 // ve bir kez render al ki overlay kalktığında dünya hazır olsun.
@@ -10846,6 +10865,7 @@ import { createSpawnStore } from './campus/spawnStore.js';
                 }
                 // Boot overlay'i, gerçek dünya ilk kez çizildikten sonra kapat.
                 await waitForFirstWorldFrame({ timeoutMs: 9000 });
+                setCampusBootPercent(100);
                 hideCampusBootOverlay();
             } catch (err) {
                 campusStarted = false;
